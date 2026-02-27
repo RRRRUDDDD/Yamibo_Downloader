@@ -31,4 +31,4 @@
 * **图片下载超时**：脚本会尝试抓取跨域图片。如果遇到图床链接失效或网络限制，控制台会输出警告，脚本会自动跳过死链图并使用透明占位图替代，以保证打包过程不被中断。
 * **权限限制**：抓取需要阅读权限的版块或附件时，脚本会使用您当前浏览器的登录态。请确保您在操作时处于已登录状态且具有相应的阅读权限。
 * **TXT 转换**：将加粗与注音分别转换为 `[b]文字[/b]` 与 `[ruby=注音]文字[/ruby]`。提取图片占位符为 `[图片: alt信息]`。
-* **CSS 编辑**：如有css修改需求可以于代码[第27行处](https://github.com/RRRRUDDDD/yamibo_downloader/blob/cfda1d95582e9527dd4f382e8e0dd821f307a3a4/yamibo_downloader.user.js#L27)修改
+* **CSS 编辑**：如有css修改需求可以于代码[第27行处](https://github.com/RRRRUDDDD/Yamibo_Downloader/blob/0afc793a2a5b941905cbf4aa813c6640eb52a21e/yamibo_downloader.user.js#L27)修改
