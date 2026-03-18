@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         百合会下载器
 // @namespace    https://github.com/RRRRUDDDD/yamibo_downloader
-// @version      1.6
+// @version      2.0
 // @description  用于下载百合会的小说与漫画，下载格式可选epub与txt
 // @author       RUD
 // @match        *://bbs.yamibo.com/thread-*
@@ -706,7 +706,6 @@ sup {
   font-family: "DK-SYMBOL";
 }
 
-/*以下填寫自定義css樣式*/
 .pius1 {
   font-size: 1.3em;
   text-align: center;
@@ -750,6 +749,449 @@ sup {
 }
 `;
 
+    const SOFTUI_STYLE = document.createElement('style');
+    SOFTUI_STYLE.textContent = `
+:root {
+    --yd-primary: #732c19;
+    --yd-primary-hover: #8a3520;
+    --yd-primary-gradient: #a0452a;
+    --yd-bg: #fcf4cf;
+    --yd-text: #3d2014;
+    --yd-text-secondary: #6b4a38;
+    --yd-text-muted: #8a6550;
+    --yd-text-dark: #4a2e1c;
+    --yd-shadow-dark: rgba(80, 30, 10, 0.18);
+    --yd-shadow-dark-sm: rgba(80, 30, 10, 0.1);
+    --yd-shadow-dark-xs: rgba(80, 30, 10, 0.15);
+    --yd-shadow-dark-md: rgba(80, 30, 10, 0.3);
+    --yd-shadow-dark-lg: rgba(80, 30, 10, 0.35);
+    --yd-shadow-dark-xl: rgba(80, 30, 10, 0.45);
+    --yd-shadow-dark-hover: rgba(80, 30, 10, 0.25);
+    --yd-shadow-dark-active: rgba(80, 30, 10, 0.2);
+    --yd-shadow-dark-press: rgba(80, 30, 10, 0.4);
+    --yd-shadow-light: rgba(255, 252, 230, 0.7);
+    --yd-shadow-light-sm: rgba(255, 252, 230, 0.5);
+    --yd-shadow-light-md: rgba(255, 252, 230, 0.9);
+    --yd-shadow-light-lg: rgba(255, 252, 230, 1);
+    --yd-shadow-light-hover: rgba(255, 252, 230, 0.8);
+    --yd-shadow-inset-dark: rgba(50, 15, 5, 0.3);
+    --yd-shadow-inset-dark-press: rgba(50, 15, 5, 0.4);
+    --yd-shadow-inset-light: rgba(160, 70, 40, 0.4);
+    --yd-highlight: rgba(115, 44, 25, 0.06);
+    --yd-scrollbar: rgba(115, 44, 25, 0.25);
+    --yd-overlay-bg: rgba(50, 30, 15, 0.5);
+    --yd-overlay-bg-blur: rgba(50, 30, 15, 0.35);
+    --yd-transition: 180ms ease;
+    --yd-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+#yd-overlay,
+#yd-overlay *,
+#epub-export-btn,
+#yd-progress-wrap {
+    box-sizing: border-box;
+    font-family: var(--yd-font);
+}
+
+/* ===== 主按钮 ===== */
+#epub-export-btn {
+    background: var(--yd-primary) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 8px 22px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    box-shadow: 4px 4px 10px var(--yd-shadow-dark-lg),
+                -4px -4px 10px var(--yd-shadow-light) !important;
+    transition: box-shadow var(--yd-transition), transform var(--yd-transition) !important;
+    margin-left: 15px !important;
+    letter-spacing: 0.5px !important;
+    position: relative !important;
+}
+#epub-export-btn:hover {
+    box-shadow: 6px 6px 14px var(--yd-shadow-dark-xl),
+                -6px -6px 14px var(--yd-shadow-light-hover) !important;
+    transform: translateY(-2px) !important;
+}
+#epub-export-btn:active {
+    box-shadow: inset 3px 3px 7px var(--yd-shadow-dark-press),
+                inset -3px -3px 7px var(--yd-shadow-light-sm) !important;
+    transform: translateY(0) !important;
+}
+#epub-export-btn:disabled {
+    opacity: 0.7 !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+}
+#epub-export-btn.yd-fixed {
+    position: fixed !important;
+    top: 20px !important;
+    right: 20px !important;
+    z-index: 9999 !important;
+}
+
+/* ===== 进度条 ===== */
+#yd-progress-wrap {
+    background: var(--yd-bg);
+    border-radius: 10px;
+    box-shadow: inset 3px 3px 6px var(--yd-shadow-dark-active),
+                inset -3px -3px 6px var(--yd-shadow-light-hover);
+    height: 8px;
+    margin-top: 6px;
+    overflow: hidden;
+    display: none;
+    width: 200px;
+    position: absolute;
+    bottom: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    pointer-events: none;
+}
+#yd-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--yd-primary), var(--yd-primary-gradient));
+    border-radius: 10px;
+    width: 0%;
+    transition: width 300ms ease;
+}
+
+/* ===== 遮罩层 ===== */
+#yd-overlay {
+    position: fixed !important;
+    top: 0 !important; left: 0 !important;
+    width: 100% !important; height: 100% !important;
+    background: var(--yd-overlay-bg) !important;
+    z-index: 10000 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+@supports (backdrop-filter: blur(6px)) {
+    #yd-overlay {
+        background: var(--yd-overlay-bg-blur) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+    }
+}
+
+/* ===== 弹窗主体 ===== */
+#yd-modal {
+    background: var(--yd-bg) !important;
+    padding: 28px 30px !important;
+    border-radius: 20px !important;
+    width: 80% !important;
+    max-width: 600px !important;
+    max-height: 80vh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    box-shadow: 10px 10px 24px var(--yd-shadow-dark-md),
+                -10px -10px 24px var(--yd-shadow-light-md) !important;
+    color: var(--yd-text) !important;
+}
+
+/* ===== 弹窗标题 ===== */
+#yd-modal .yd-title {
+    margin: 0 0 18px 0 !important;
+    padding-bottom: 14px !important;
+    border-bottom: none !important;
+    text-align: center !important;
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    color: var(--yd-primary) !important;
+    position: relative !important;
+}
+#yd-modal .yd-title::after {
+    content: '' !important;
+    display: block !important;
+    width: 60px !important;
+    height: 3px !important;
+    background: var(--yd-primary) !important;
+    border-radius: 2px !important;
+    margin: 12px auto 0 !important;
+}
+
+/* ===== 格式选择 - 分段控件 ===== */
+.yd-segment {
+    display: flex !important;
+    background: var(--yd-bg) !important;
+    border-radius: 14px !important;
+    box-shadow: inset 3px 3px 7px var(--yd-shadow-dark),
+                inset -3px -3px 7px var(--yd-shadow-light-md) !important;
+    padding: 4px !important;
+    margin-bottom: 18px !important;
+    gap: 0 !important;
+}
+.yd-segment input[type="radio"] {
+    display: none !important;
+}
+.yd-segment label {
+    flex: 1 !important;
+    text-align: center !important;
+    padding: 9px 0 !important;
+    border-radius: 11px !important;
+    cursor: pointer !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    color: var(--yd-text-muted) !important;
+    transition: color var(--yd-transition), background var(--yd-transition), box-shadow var(--yd-transition) !important;
+    margin: 0 !important;
+    user-select: none !important;
+}
+.yd-segment label:hover {
+    color: var(--yd-primary) !important;
+}
+.yd-segment input[type="radio"]:checked + label {
+    background: var(--yd-primary) !important;
+    color: #fff !important;
+    box-shadow: 3px 3px 8px var(--yd-shadow-dark-md),
+                -3px -3px 8px var(--yd-shadow-light-sm) !important;
+    font-weight: 600 !important;
+}
+
+/* ===== 控制按钮（全选/反选） ===== */
+.yd-ctrl-btn {
+    background: var(--yd-bg) !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 7px 16px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: var(--yd-text-secondary) !important;
+    cursor: pointer !important;
+    box-shadow: 3px 3px 7px var(--yd-shadow-dark),
+                -3px -3px 7px var(--yd-shadow-light-md) !important;
+    transition: box-shadow var(--yd-transition), transform var(--yd-transition) !important;
+    margin-right: 10px !important;
+}
+.yd-ctrl-btn:hover {
+    box-shadow: 5px 5px 10px var(--yd-shadow-dark-hover),
+                -5px -5px 10px var(--yd-shadow-light-lg) !important;
+    transform: translateY(-1px) !important;
+}
+.yd-ctrl-btn:active {
+    box-shadow: inset 2px 2px 5px var(--yd-shadow-dark-active),
+                inset -2px -2px 5px var(--yd-shadow-light) !important;
+    transform: translateY(0) !important;
+}
+
+/* ===== 章节列表容器 ===== */
+.yd-list {
+    flex: 1 !important;
+    overflow-y: auto !important;
+    background: var(--yd-bg) !important;
+    border-radius: 14px !important;
+    box-shadow: inset 3px 3px 7px var(--yd-shadow-dark-xs),
+                inset -3px -3px 7px var(--yd-shadow-light-md) !important;
+    padding: 14px 16px !important;
+    margin-bottom: 18px !important;
+    border: none !important;
+}
+.yd-list::-webkit-scrollbar {
+    width: 6px !important;
+}
+.yd-list::-webkit-scrollbar-track {
+    background: transparent !important;
+}
+.yd-list::-webkit-scrollbar-thumb {
+    background: var(--yd-scrollbar) !important;
+    border-radius: 3px !important;
+}
+
+/* ===== 章节列表项 ===== */
+.yd-list label {
+    display: flex !important;
+    align-items: center !important;
+    padding: 8px 10px !important;
+    margin-bottom: 4px !important;
+    border-radius: 10px !important;
+    cursor: pointer !important;
+    word-break: break-all !important;
+    transition: background 150ms ease, box-shadow 150ms ease !important;
+    font-size: 14px !important;
+    color: var(--yd-text-dark) !important;
+}
+.yd-list label:hover {
+    background: var(--yd-highlight) !important;
+    box-shadow: 2px 2px 5px var(--yd-shadow-dark-sm),
+                -2px -2px 5px var(--yd-shadow-light) !important;
+}
+
+/* ===== 自定义 Checkbox ===== */
+.yd-list input[type="checkbox"] {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 20px !important;
+    height: 20px !important;
+    min-width: 20px !important;
+    border-radius: 6px !important;
+    background: var(--yd-bg) !important;
+    box-shadow: inset 2px 2px 4px var(--yd-shadow-dark),
+                inset -2px -2px 4px var(--yd-shadow-light-md) !important;
+    cursor: pointer !important;
+    margin: 0 10px 0 0 !important;
+    transition: background var(--yd-transition), box-shadow var(--yd-transition) !important;
+    position: relative !important;
+    border: none !important;
+}
+.yd-list input[type="checkbox"]:checked {
+    background: var(--yd-primary) !important;
+    box-shadow: inset 2px 2px 4px var(--yd-shadow-inset-dark),
+                inset -2px -2px 4px var(--yd-shadow-inset-light) !important;
+}
+.yd-list input[type="checkbox"]:checked::after {
+    content: '' !important;
+    position: absolute !important;
+    left: 6px !important;
+    top: 2px !important;
+    width: 6px !important;
+    height: 11px !important;
+    border: solid var(--yd-bg) !important;
+    border-width: 0 2.5px 2.5px 0 !important;
+    transform: rotate(45deg) !important;
+}
+
+/* ===== 操作按钮区域 ===== */
+.yd-actions {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: 10px !important;
+}
+
+/* ===== 次要按钮（取消、获取楼主楼层） ===== */
+.yd-btn-secondary {
+    background: var(--yd-bg) !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 10px 22px !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    color: var(--yd-text-secondary) !important;
+    cursor: pointer !important;
+    box-shadow: 4px 4px 10px var(--yd-shadow-dark),
+                -4px -4px 10px var(--yd-shadow-light-md) !important;
+    transition: box-shadow var(--yd-transition), transform var(--yd-transition) !important;
+}
+.yd-btn-secondary:hover {
+    box-shadow: 6px 6px 12px var(--yd-shadow-dark-hover),
+                -6px -6px 12px var(--yd-shadow-light-lg) !important;
+    transform: translateY(-2px) !important;
+}
+.yd-btn-secondary:active {
+    box-shadow: inset 3px 3px 6px var(--yd-shadow-dark-active),
+                inset -3px -3px 6px var(--yd-shadow-light) !important;
+    transform: translateY(0) !important;
+}
+
+/* ===== 主要按钮（确认提取） ===== */
+.yd-btn-primary {
+    background: var(--yd-primary) !important;
+    color: #fff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 10px 26px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    box-shadow: 4px 4px 10px var(--yd-shadow-dark-lg),
+                -4px -4px 10px var(--yd-shadow-light) !important;
+    transition: background var(--yd-transition), box-shadow var(--yd-transition), transform var(--yd-transition) !important;
+}
+.yd-btn-primary:hover {
+    background: var(--yd-primary-hover) !important;
+    box-shadow: 6px 6px 14px var(--yd-shadow-dark-xl),
+                -6px -6px 14px var(--yd-shadow-light-hover) !important;
+    transform: translateY(-2px) !important;
+}
+.yd-btn-primary:active {
+    box-shadow: inset 3px 3px 7px var(--yd-shadow-inset-dark-press),
+                inset -3px -3px 7px var(--yd-shadow-light-sm) !important;
+    transform: translateY(0) !important;
+}
+
+/* ===== 小号按钮修饰符 ===== */
+.yd-btn-sm {
+    padding: 7px 16px !important;
+    font-size: 13px !important;
+    border-radius: 10px !important;
+}
+
+/* ===== 格式标签 ===== */
+.yd-format-label {
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    color: var(--yd-primary) !important;
+    margin-bottom: 10px !important;
+    display: block !important;
+}
+
+/* ===== 控制栏 ===== */
+.yd-ctrl-bar {
+    margin-bottom: 12px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+.yd-ctrl-bar .yd-ctrl-btn:last-of-type {
+    margin-right: 0 !important;
+}
+
+/* ===== 按钮组 ===== */
+.yd-btn-group {
+    display: flex !important;
+    gap: 10px !important;
+}
+
+/* ===== 筛选面板 ===== */
+.yd-filter-panel {
+    background: var(--yd-bg) !important;
+    border-radius: 12px !important;
+    box-shadow: inset 3px 3px 7px var(--yd-shadow-dark),
+                inset -3px -3px 7px var(--yd-shadow-light-md) !important;
+    padding: 14px 16px !important;
+    margin-bottom: 12px !important;
+    display: none !important;
+}
+.yd-filter-panel.yd-open {
+    display: block !important;
+}
+.yd-filter-input {
+    width: 100% !important;
+    padding: 10px 14px !important;
+    border: none !important;
+    border-radius: 10px !important;
+    background: var(--yd-bg) !important;
+    box-shadow: inset 2px 2px 5px var(--yd-shadow-dark),
+                inset -2px -2px 5px var(--yd-shadow-light-md) !important;
+    font-size: 14px !important;
+    color: var(--yd-text) !important;
+    outline: none !important;
+    font-family: var(--yd-font) !important;
+    transition: box-shadow var(--yd-transition) !important;
+}
+.yd-filter-input:focus {
+    box-shadow: inset 3px 3px 6px var(--yd-shadow-dark-md),
+                inset -3px -3px 6px var(--yd-shadow-light) !important;
+}
+.yd-filter-input::placeholder {
+    color: var(--yd-text-muted) !important;
+    opacity: 0.7 !important;
+}
+.yd-filter-hint {
+    font-size: 12px !important;
+    color: var(--yd-text-muted) !important;
+    margin-top: 8px !important;
+    line-height: 1.5 !important;
+}
+.yd-filter-actions {
+    display: flex !important;
+    justify-content: flex-end !important;
+    gap: 8px !important;
+    margin-top: 10px !important;
+}
+`;
+    (document.head || document.documentElement).appendChild(SOFTUI_STYLE);
+
     function getPageMode() {
         const href = window.location.href;
         if (href.includes('misc.php?mod=tag')) return 'tag';
@@ -764,9 +1206,15 @@ sup {
 
         const btn = document.createElement('button');
         btn.id = 'epub-export-btn';
-        btn.innerText = mode === 'tag' ? '📚 提取本标签全部帖子' : '📚 提取本帖内容';
-        btn.style.cssText = 'margin-left: 15px; padding: 4px 12px; cursor: pointer; background-color: #ff6699; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);';
+        btn.innerText = mode === 'tag' ? '提取本标签全部帖子' : '提取本帖内容';
         btn.onclick = startExtraction;
+
+        const progressWrap = document.createElement('div');
+        progressWrap.id = 'yd-progress-wrap';
+        const progressBar = document.createElement('div');
+        progressBar.id = 'yd-progress-bar';
+        progressWrap.appendChild(progressBar);
+        btn.appendChild(progressWrap);
 
         if (mode === 'thread') {
             const titleSpan = document.querySelector('#thread_subject');
@@ -775,7 +1223,7 @@ sup {
             const header = document.querySelector('h1') || document.querySelector('.bm_h');
             if (header) header.appendChild(btn);
             else {
-                btn.style.position = 'fixed'; btn.style.top = '20px'; btn.style.right = '20px'; btn.style.zIndex = '9999';
+                btn.classList.add('yd-fixed');
                 document.body.appendChild(btn);
             }
         }
@@ -788,6 +1236,35 @@ sup {
     function escapeXML(str) {
         if (!str) return '';
         return str.replace(/[\x00-\x1F\x7F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+    }
+
+    function createChapterLabel(link, idx) {
+        const lbl = document.createElement('label');
+        lbl.innerHTML = `<input type="checkbox" class="chap-cb" value="${idx}" checked><span>${idx + 1}. ${escapeXML(link.title)}</span>`;
+        return lbl;
+    }
+
+    function parseFilterExpr(expr, total) {
+        const indices = new Set();
+        expr.split(',').forEach(part => {
+            part = part.trim();
+            if (!part) return;
+            if (part.includes('-')) {
+                const dashIdx = part.indexOf('-');
+                const a = part.substring(0, dashIdx).trim();
+                const b = part.substring(dashIdx + 1).trim();
+                const start = a ? parseInt(a, 10) : 1;
+                const end = b ? parseInt(b, 10) : total;
+                if (isNaN(start) || isNaN(end)) return;
+                for (let i = Math.max(1, start); i <= Math.min(total, end); i++) {
+                    indices.add(i - 1);
+                }
+            } else {
+                const n = parseInt(part, 10);
+                if (!isNaN(n) && n >= 1 && n <= total) indices.add(n - 1);
+            }
+        });
+        return indices;
     }
 
     function fetchImageBuffer(url) {
@@ -804,13 +1281,156 @@ sup {
         });
     }
 
+    function buildModal(links, mode, fetchOPFloorsHelper, onLinksUpdate) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.id = 'yd-overlay';
+
+            const modal = document.createElement('div');
+            modal.id = 'yd-modal';
+
+            const title = document.createElement('h3');
+            title.className = 'yd-title';
+            title.innerText = '请选择要下载的格式与章节';
+            modal.appendChild(title);
+
+            const formatLabel = document.createElement('span');
+            formatLabel.className = 'yd-format-label';
+            formatLabel.innerText = '下载格式';
+            modal.appendChild(formatLabel);
+
+            const formatDiv = document.createElement('div');
+            formatDiv.className = 'yd-segment';
+            const isEpub = currentFormat === 'EPUB' ? 'checked' : '';
+            const isTxt = currentFormat === 'TXT' ? 'checked' : '';
+            const isBoth = currentFormat === 'BOTH' ? 'checked' : '';
+            formatDiv.innerHTML = `
+                <input type="radio" name="dl_format" value="EPUB" id="yd-fmt-epub" ${isEpub || (!isTxt && !isBoth ? 'checked' : '')}>
+                <label for="yd-fmt-epub">EPUB</label>
+                <input type="radio" name="dl_format" value="TXT" id="yd-fmt-txt" ${isTxt}>
+                <label for="yd-fmt-txt">TXT</label>
+                <input type="radio" name="dl_format" value="BOTH" id="yd-fmt-both" ${isBoth}>
+                <label for="yd-fmt-both">EPUB + TXT</label>
+            `;
+            modal.appendChild(formatDiv);
+
+            const ctrlDiv = document.createElement('div');
+            ctrlDiv.className = 'yd-ctrl-bar';
+            ctrlDiv.innerHTML = `
+                <button id="btn-sel-all" class="yd-ctrl-btn">全选</button>
+                <button id="btn-sel-inv" class="yd-ctrl-btn">反选</button>
+                <span style="flex:1"></span>
+                <button id="btn-filter" class="yd-ctrl-btn">筛选</button>
+            `;
+            modal.appendChild(ctrlDiv);
+
+            const filterPanel = document.createElement('div');
+            filterPanel.className = 'yd-filter-panel';
+            filterPanel.innerHTML = `
+                <input type="text" class="yd-filter-input" id="yd-filter-expr" placeholder="">
+                <div class="yd-filter-hint">通过序号进行快速筛选，语法：99 = 第99章 | 9-99 = 第9~99章 | 9- = 第9章起 | -99 = 到第99章。也可通过如1-5, 8, 12-组合使用（逗号分隔）</div>
+                <div class="yd-filter-actions">
+                    <button class="yd-ctrl-btn" id="btn-filter-cancel">收起</button>
+                    <button class="yd-btn-primary yd-btn-sm" id="btn-filter-apply">应用</button>
+                </div>
+            `;
+            modal.appendChild(filterPanel);
+
+            const listDiv = document.createElement('div');
+            listDiv.className = 'yd-list';
+            links.forEach((link, idx) => {
+                listDiv.appendChild(createChapterLabel(link, idx));
+            });
+            modal.appendChild(listDiv);
+
+            const btnDiv = document.createElement('div');
+            btnDiv.className = 'yd-actions';
+
+            const leftBtnDiv = document.createElement('div');
+            if (mode === 'thread') {
+                const fetchOpBtn = document.createElement('button');
+                fetchOpBtn.innerText = '获取楼主全部楼层';
+                fetchOpBtn.className = 'yd-btn-secondary';
+                fetchOpBtn.onclick = async () => {
+                    fetchOpBtn.innerText = '获取中...';
+                    fetchOpBtn.disabled = true;
+                    const opLinks = await fetchOPFloorsHelper();
+                    if (opLinks.length > 0) {
+                        onLinksUpdate(opLinks);
+                        links = opLinks;
+                        listDiv.innerHTML = '';
+                        links.forEach((link, idx) => {
+                            listDiv.appendChild(createChapterLabel(link, idx));
+                        });
+                        fetchOpBtn.innerText = '已切换';
+                    } else {
+                        fetchOpBtn.innerText = '获取失败';
+                        fetchOpBtn.disabled = false;
+                    }
+                };
+                leftBtnDiv.appendChild(fetchOpBtn);
+            }
+            btnDiv.appendChild(leftBtnDiv);
+
+            const rightBtnDiv = document.createElement('div');
+            rightBtnDiv.className = 'yd-btn-group';
+            const cancelBtn = document.createElement('button');
+            cancelBtn.innerText = '取消';
+            cancelBtn.className = 'yd-btn-secondary';
+            cancelBtn.onclick = () => { document.body.removeChild(overlay); resolve(null); };
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.innerText = '确认提取';
+            confirmBtn.className = 'yd-btn-primary';
+            confirmBtn.onclick = () => {
+                const format = overlay.querySelector('input[name="dl_format"]:checked').value;
+                const selectedIdxs = Array.from(overlay.querySelectorAll('.chap-cb:checked')).map(cb => parseInt(cb.value));
+                document.body.removeChild(overlay);
+                resolve({ format, selectedIdxs });
+            };
+
+            rightBtnDiv.appendChild(cancelBtn);
+            rightBtnDiv.appendChild(confirmBtn);
+            btnDiv.appendChild(rightBtnDiv);
+
+            modal.appendChild(btnDiv);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+
+            overlay.querySelector('#btn-sel-all').onclick = () => {
+                overlay.querySelectorAll('.chap-cb').forEach(cb => cb.checked = true);
+            };
+            overlay.querySelector('#btn-sel-inv').onclick = () => {
+                overlay.querySelectorAll('.chap-cb').forEach(cb => cb.checked = !cb.checked);
+            };
+            overlay.querySelector('#btn-filter').onclick = () => {
+                filterPanel.classList.toggle('yd-open');
+                const input = overlay.querySelector('#yd-filter-expr');
+                if (filterPanel.classList.contains('yd-open')) input.focus();
+            };
+            overlay.querySelector('#btn-filter-cancel').onclick = () => {
+                filterPanel.classList.remove('yd-open');
+            };
+            overlay.querySelector('#btn-filter-apply').onclick = () => {
+                const expr = overlay.querySelector('#yd-filter-expr').value.trim();
+                if (!expr) return;
+                const cbs = overlay.querySelectorAll('.chap-cb');
+                const matched = parseFilterExpr(expr, cbs.length);
+                cbs.forEach(cb => { cb.checked = matched.has(parseInt(cb.value)); });
+                filterPanel.classList.remove('yd-open');
+            };
+            overlay.querySelector('#yd-filter-expr').onkeydown = (e) => {
+                if (e.key === 'Enter') overlay.querySelector('#btn-filter-apply').click();
+            };
+        });
+    }
+
     async function startExtraction(e) {
-        const btn = e.target;
+        const btn = e.target.closest('#epub-export-btn') || e.target;
         btn.disabled = true;
-        btn.style.backgroundColor = '#999999';
 
         if (typeof fflate === 'undefined' && (currentFormat === 'EPUB' || currentFormat === 'BOTH')) {
-            alert('❌ fflate 打包引擎未加载，请刷新页面。');
+            alert('fflate 打包引擎未加载，请刷新页面。');
             resetButton(btn, getPageMode()); return;
         }
 
@@ -883,7 +1503,7 @@ sup {
 
         if (mode === 'thread') {
             const firstPost = document.querySelector('.t_f');
-            if (!firstPost) { alert('❌ 未能定位到一楼内容！'); resetButton(btn, mode); return; }
+            if (!firstPost) { alert('未能定位到一楼内容！'); resetButton(btn, mode); return; }
             const rawLinks = Array.from(firstPost.querySelectorAll('a')).filter(a => {
                 const rawHref = a.getAttribute('href');
                 return rawHref && (rawHref.includes('viewthread') || rawHref.includes('thread-') || rawHref.includes('redirect')) && !rawHref.includes('mod=attachment') && !rawHref.includes('action=reply');
@@ -892,7 +1512,7 @@ sup {
             threadTitle = document.querySelector('#thread_subject').innerText.trim();
 
             if (links.length === 0) {
-                btn.innerText = '🔍 未检测到链接，正在扫描楼主全部楼层...';
+                setBtnText(btn, '未检测到链接，正在扫描楼主全部楼层...');
                 links = await fetchOPFloorsHelper();
             }
 
@@ -916,117 +1536,10 @@ sup {
             threadTitle = tagMatch ? tagMatch[1].trim() : '标签合集';
         }
 
-        if (links.length === 0) { alert('❌ 没有找到有效的帖子链接，且抓取楼主楼层失败！'); resetButton(btn, mode); return; }
+        if (links.length === 0) { alert('没有找到有效的帖子链接，且抓取楼主楼层失败！'); resetButton(btn, mode); return; }
         threadTitle = threadTitle.replace(/[\\/:*?"<>|]/g, '');
 
-        const userSelection = await new Promise((resolve) => {
-            const overlay = document.createElement('div');
-            overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;font-family:sans-serif;';
-
-            const modal = document.createElement('div');
-            modal.style.cssText = 'background:#fff;padding:20px;border-radius:8px;width:80%;max-width:600px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 4px 15px rgba(0,0,0,0.2);color:#333;';
-
-            const title = document.createElement('h3');
-            title.innerText = '请选择要下载的格式与章节';
-            title.style.cssText = 'margin-top:0;margin-bottom:15px;border-bottom:1px solid #eee;padding-bottom:10px;text-align:center;';
-            modal.appendChild(title);
-
-            const formatDiv = document.createElement('div');
-            formatDiv.style.cssText = 'margin-bottom:15px;font-size:15px;';
-            const isEpub = currentFormat === 'EPUB' ? 'checked' : '';
-            const isTxt = currentFormat === 'TXT' ? 'checked' : '';
-            const isBoth = currentFormat === 'BOTH' ? 'checked' : '';
-            formatDiv.innerHTML = `
-                <strong style="margin-right:10px;">下载格式：</strong>
-                <label style="cursor:pointer;"><input type="radio" name="dl_format" value="EPUB" ${isEpub || (!isTxt && !isBoth ? 'checked' : '')}> EPUB</label>
-                <label style="margin-left:15px;cursor:pointer;"><input type="radio" name="dl_format" value="TXT" ${isTxt}> TXT</label>
-                <label style="margin-left:15px;cursor:pointer;"><input type="radio" name="dl_format" value="BOTH" ${isBoth}> EPUB + TXT</label>
-            `;
-            modal.appendChild(formatDiv);
-
-            const ctrlDiv = document.createElement('div');
-            ctrlDiv.style.cssText = 'margin-bottom:10px;';
-            ctrlDiv.innerHTML = `
-                <button id="btn-sel-all" style="margin-right:10px;padding:4px 10px;cursor:pointer;border:1px solid #ccc;border-radius:4px;background:#f9f9f9;">全选</button>
-                <button id="btn-sel-inv" style="padding:4px 10px;cursor:pointer;border:1px solid #ccc;border-radius:4px;background:#f9f9f9;">反选</button>
-            `;
-            modal.appendChild(ctrlDiv);
-
-            const listDiv = document.createElement('div');
-            listDiv.style.cssText = 'flex:1;overflow-y:auto;border:1px solid #ccc;padding:10px;margin-bottom:15px;border-radius:4px;background:#fafafa;';
-            links.forEach((link, idx) => {
-                const lbl = document.createElement('label');
-                lbl.style.cssText = 'display:block;margin-bottom:8px;cursor:pointer;word-break:break-all;';
-                lbl.innerHTML = `<input type="checkbox" class="chap-cb" value="${idx}" checked> <span style="margin-left:5px;">${idx + 1}. ${escapeXML(link.title)}</span>`;
-                listDiv.appendChild(lbl);
-            });
-            modal.appendChild(listDiv);
-
-            // 按钮容器修改为左右分布
-            const btnDiv = document.createElement('div');
-            btnDiv.style.cssText = 'display:flex; justify-content:space-between; align-items:center;';
-
-            // 左侧按钮（获取楼主全部楼层，仅在 thread 模式下显示）
-            const leftBtnDiv = document.createElement('div');
-            if (mode === 'thread') {
-                const fetchOpBtn = document.createElement('button');
-                fetchOpBtn.innerText = '没有想要的？获取楼主全部楼层';
-                fetchOpBtn.style.cssText = 'padding:8px 15px;cursor:pointer;border:1px solid #ccc;border-radius:4px;background:#f0f0f0;font-weight:bold;color:#333;';
-                fetchOpBtn.onclick = async () => {
-                    fetchOpBtn.innerText = '🔍 获取中...';
-                    fetchOpBtn.disabled = true;
-                    const opLinks = await fetchOPFloorsHelper();
-                    if (opLinks.length > 0) {
-                        links = opLinks; // 更新外部的 links 数组
-                        listDiv.innerHTML = ''; // 清空原有列表
-                        links.forEach((link, idx) => {
-                            const lbl = document.createElement('label');
-                            lbl.style.cssText = 'display:block;margin-bottom:8px;cursor:pointer;word-break:break-all;';
-                            lbl.innerHTML = `<input type="checkbox" class="chap-cb" value="${idx}" checked> <span style="margin-left:5px;">${idx + 1}. ${escapeXML(link.title)}</span>`;
-                            listDiv.appendChild(lbl);
-                        });
-                        fetchOpBtn.innerText = '✅ 已切换为楼主楼层';
-                    } else {
-                        fetchOpBtn.innerText = '❌ 获取失败';
-                        fetchOpBtn.disabled = false;
-                    }
-                };
-                leftBtnDiv.appendChild(fetchOpBtn);
-            }
-            btnDiv.appendChild(leftBtnDiv);
-
-            // 右侧按钮（取消、确认提取）
-            const rightBtnDiv = document.createElement('div');
-            const cancelBtn = document.createElement('button');
-            cancelBtn.innerText = '取消下载';
-            cancelBtn.style.cssText = 'margin-right:10px;padding:8px 20px;cursor:pointer;border:1px solid #ccc;border-radius:4px;background:#fff;';
-            cancelBtn.onclick = () => { document.body.removeChild(overlay); resolve(null); };
-
-            const confirmBtn = document.createElement('button');
-            confirmBtn.innerText = '确认提取';
-            confirmBtn.style.cssText = 'padding:8px 20px;cursor:pointer;background-color:#ff6699;color:white;border:none;border-radius:4px;font-weight:bold;';
-            confirmBtn.onclick = () => {
-                const format = document.querySelector('input[name="dl_format"]:checked').value;
-                const selectedIdxs = Array.from(document.querySelectorAll('.chap-cb:checked')).map(cb => parseInt(cb.value));
-                document.body.removeChild(overlay);
-                resolve({ format, selectedIdxs });
-            };
-
-            rightBtnDiv.appendChild(cancelBtn);
-            rightBtnDiv.appendChild(confirmBtn);
-            btnDiv.appendChild(rightBtnDiv);
-
-            modal.appendChild(btnDiv);
-            overlay.appendChild(modal);
-            document.body.appendChild(overlay);
-
-            document.getElementById('btn-sel-all').onclick = () => {
-                document.querySelectorAll('.chap-cb').forEach(cb => cb.checked = true);
-            };
-            document.getElementById('btn-sel-inv').onclick = () => {
-                document.querySelectorAll('.chap-cb').forEach(cb => cb.checked = !cb.checked);
-            };
-        });
+        const userSelection = await buildModal(links, mode, fetchOPFloorsHelper, (newLinks) => { links = newLinks; });
 
         if (!userSelection) {
             resetButton(btn, mode);
@@ -1034,7 +1547,7 @@ sup {
         }
 
         if (userSelection.selectedIdxs.length === 0) {
-            alert('❌ 必须至少选择一个章节！');
+            alert('必须至少选择一个章节！');
             resetButton(btn, mode);
             return;
         }
@@ -1139,7 +1652,8 @@ sup {
             const linkTitle = linkObj.title || `第 ${i + 1} 章`;
             const url = linkObj.url;
 
-            btn.innerText = `⏳ 获取章节: ${i + 1} / ${links.length}...`;
+            setBtnText(btn, `获取章节: ${i + 1} / ${links.length}...`);
+            updateProgress(btn, Math.round(((i + 1) / links.length) * 70));
 
             try {
                 const response = await fetch(url);
@@ -1202,7 +1716,8 @@ sup {
         if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && imageRegistry.length > 0) {
             for (let i = 0; i < imageRegistry.length; i++) {
                 const img = imageRegistry[i];
-                btn.innerText = `🖼️ 下载插图: ${i + 1} / ${imageRegistry.length}...`;
+                setBtnText(btn, `下载插图: ${i + 1} / ${imageRegistry.length}...`);
+                updateProgress(btn, 70 + Math.round(((i + 1) / imageRegistry.length) * 25));
                 try {
                     if (img.url.startsWith('data:image')) {
                         const res = await fetch(img.url);
@@ -1211,11 +1726,14 @@ sup {
                         img.buffer = await fetchImageBuffer(img.url);
                     }
                     await new Promise(resolve => setTimeout(resolve, 150));
-                } catch (err) {}
+                } catch (err) {
+                    console.warn(`插图下载失败: ${img.url}`, err);
+                }
             }
         }
 
-        btn.innerText = '📦 正在打包中...';
+        setBtnText(btn, '正在打包中...');
+        updateProgress(btn, 98);
         setTimeout(() => {
             threadTitle = threadTitle.replace(/&/g, '＆');
             chapters.forEach(ch => ch.title = ch.title.replace(/&/g, '＆'));
@@ -1226,16 +1744,36 @@ sup {
             if (currentFormat === 'EPUB' || currentFormat === 'BOTH') {
                 generateEPUB(threadTitle, chapters, imageRegistry, btn, mode);
             } else {
-                btn.innerText = '✅ 下载完成！';
+                setBtnText(btn, '下载完成！');
+                updateProgress(btn, 100);
                 setTimeout(() => resetButton(btn, mode), 3000);
             }
         }, 100);
     }
 
+    function setBtnText(btn, text) {
+        const progressWrap = btn.querySelector('#yd-progress-wrap');
+        btn.textContent = '';
+        btn.appendChild(document.createTextNode(text));
+        if (progressWrap) btn.appendChild(progressWrap);
+    }
+
+    function updateProgress(btn, percent) {
+        const bar = btn.querySelector('#yd-progress-bar');
+        const wrap = btn.querySelector('#yd-progress-wrap');
+        if (bar && wrap) {
+            wrap.style.display = 'block';
+            bar.style.width = percent + '%';
+        }
+    }
+
     function resetButton(btn, mode) {
         btn.disabled = false;
-        btn.style.backgroundColor = '#ff6699';
-        btn.innerText = mode === 'tag' ? '📚 提取本标签全部帖子' : '📚 提取本帖内容';
+        const wrap = btn.querySelector('#yd-progress-wrap');
+        const bar = btn.querySelector('#yd-progress-bar');
+        if (wrap) wrap.style.display = 'none';
+        if (bar) bar.style.width = '0%';
+        setBtnText(btn, mode === 'tag' ? '提取本标签全部帖子' : '提取本帖内容');
     }
 
     function generateTXT(title, chapters) {
@@ -1396,7 +1934,7 @@ sup {
 
         fflate.zip(epubObj, { level: 0 }, (err, zipped) => {
             if (err) {
-                alert('❌ 排版封装失败！\n' + err.message);
+                alert('排版封装失败！\n' + err.message);
                 resetButton(btn, mode); return;
             }
             const blob = new Blob([zipped], { type: 'application/epub+zip' });
@@ -1409,7 +1947,8 @@ sup {
             document.body.removeChild(a);
             URL.revokeObjectURL(downloadUrl);
 
-            btn.innerText = '✅ 下载完成！';
+            setBtnText(btn, '下载完成！');
+            updateProgress(btn, 100);
             setTimeout(() => resetButton(btn, mode), 3000);
         });
     }
