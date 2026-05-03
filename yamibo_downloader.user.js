@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         百合会下载器
 // @namespace    https://github.com/RRRRUDDDD/yamibo_downloader
-// @version      2.0
+// @version      2.4
 // @description  用于下载百合会的小说与漫画，下载格式可选epub与txt
 // @author       RUD
 // @match        *://bbs.yamibo.com/thread-*
@@ -1051,6 +1051,48 @@ sup {
     transform: rotate(45deg) !important;
 }
 
+/* ===== 单条章节"全楼层"开关 ===== */
+.yd-op-mode {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    margin-left: auto !important;
+    padding: 2px 8px !important;
+    font-size: 12px !important;
+    color: var(--yd-text-secondary) !important;
+    border-radius: 8px !important;
+    cursor: pointer !important;
+    user-select: none !important;
+    flex-shrink: 0 !important;
+}
+.yd-op-mode input[type="checkbox"] {
+    width: 14px !important;
+    height: 14px !important;
+    min-width: 14px !important;
+    margin: 0 !important;
+    border-radius: 4px !important;
+}
+/* 覆写勾的位置/尺寸，匹配 14px 小框（默认 .yd-list 规则是给 20px 大框设计的） */
+.yd-list .yd-op-mode input[type="checkbox"]:checked::after {
+    left: 4px !important;
+    top: 1px !important;
+    width: 3.5px !important;
+    height: 7.5px !important;
+    border-width: 0 1.6px 1.6px 0 !important;
+}
+.yd-op-mode:has(input:checked) {
+    color: var(--yd-primary) !important;
+    font-weight: 500 !important;
+}
+.yd-list label .yd-chap-title {
+    flex: 1 !important;
+    min-width: 0 !important;
+    overflow-wrap: anywhere !important;
+}
+.yd-allop-btn {
+    margin-right: 10px !important;
+}
+
 /* ===== 操作按钮区域 ===== */
 .yd-actions {
     display: flex !important;
@@ -1240,7 +1282,14 @@ sup {
 
     function createChapterLabel(link, idx) {
         const lbl = document.createElement('label');
-        lbl.innerHTML = `<input type="checkbox" class="chap-cb" value="${idx}" checked><span>${idx + 1}. ${escapeXML(link.title)}</span>`;
+        lbl.innerHTML = `<input type="checkbox" class="chap-cb" value="${idx}" checked><span class="yd-chap-title">${idx + 1}. ${escapeXML(link.title)}</span><span class="yd-op-mode" title="勾选后扫描该帖楼主全部楼层（适用于图片在二楼及以上的情况）"><input type="checkbox" class="chap-op-cb" value="${idx}"><span>全楼层</span></span>`;
+        const opCb = lbl.querySelector('.chap-op-cb');
+        const opWrap = lbl.querySelector('.yd-op-mode');
+        opWrap.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            opCb.checked = !opCb.checked;
+        });
         return lbl;
     }
 
@@ -1320,6 +1369,7 @@ sup {
                 <button id="btn-sel-all" class="yd-ctrl-btn">全选</button>
                 <button id="btn-sel-inv" class="yd-ctrl-btn">反选</button>
                 <span style="flex:1"></span>
+                <button id="btn-all-op" type="button" class="yd-btn-primary yd-btn-sm yd-allop-btn" title="一键勾选/取消所有章节右侧的全楼层开关">全部按全楼层</button>
                 <button id="btn-filter" class="yd-ctrl-btn">筛选</button>
             `;
             modal.appendChild(ctrlDiv);
@@ -1385,8 +1435,9 @@ sup {
             confirmBtn.onclick = () => {
                 const format = overlay.querySelector('input[name="dl_format"]:checked').value;
                 const selectedIdxs = Array.from(overlay.querySelectorAll('.chap-cb:checked')).map(cb => parseInt(cb.value));
+                const opModeIdxs = new Set(Array.from(overlay.querySelectorAll('.chap-op-cb:checked')).map(cb => parseInt(cb.value)));
                 document.body.removeChild(overlay);
-                resolve({ format, selectedIdxs });
+                resolve({ format, selectedIdxs, opModeIdxs });
             };
 
             rightBtnDiv.appendChild(cancelBtn);
@@ -1402,6 +1453,12 @@ sup {
             };
             overlay.querySelector('#btn-sel-inv').onclick = () => {
                 overlay.querySelectorAll('.chap-cb').forEach(cb => cb.checked = !cb.checked);
+            };
+            overlay.querySelector('#btn-all-op').onclick = () => {
+                const cbs = overlay.querySelectorAll('.chap-op-cb');
+                if (cbs.length === 0) return;
+                const allChecked = Array.from(cbs).every(cb => cb.checked);
+                cbs.forEach(cb => cb.checked = !allChecked);
             };
             overlay.querySelector('#btn-filter').onclick = () => {
                 filterPanel.classList.toggle('yd-open');
@@ -1554,7 +1611,8 @@ sup {
 
         currentFormat = userSelection.format;
         GM_setValue('downloadFormat', currentFormat);
-        links = userSelection.selectedIdxs.map(idx => links[idx]);
+        const opModeIdxs = userSelection.opModeIdxs || new Set();
+        links = userSelection.selectedIdxs.map(idx => ({ ...links[idx], fullOpMode: opModeIdxs.has(idx) }));
 
         const chapters = [];
         const imageRegistry = [];
@@ -1647,12 +1705,102 @@ sup {
             }).join('\n');
         }
 
+        function parsePcbToContent(pcbNode) {
+            let frag = '';
+            if (!pcbNode) return frag;
+            const tfNode = pcbNode.querySelector('.t_f');
+            if (tfNode) frag += parseToParagraphs(tfNode);
+
+            const pattlNode = pcbNode.querySelector('.pattl');
+            if (pattlNode) {
+                const attachImgs = pattlNode.querySelectorAll('img');
+                let attachContent = '';
+                attachImgs.forEach(imgNode => {
+                    let src = imgNode.getAttribute('zoomfile') || imgNode.getAttribute('file') || imgNode.getAttribute('src');
+                    if (src && !src.includes('smiley') && !src.includes('smilies') && !src.includes('none.gif')) {
+                        let wrapper = document.createElement('div');
+                        wrapper.appendChild(imgNode.cloneNode(true));
+                        attachContent += parseToParagraphs(wrapper);
+                    }
+                });
+                if (attachContent) frag += attachContent;
+            }
+            return frag;
+        }
+
+        function extractOPPcbsFromDoc(doc, opUid) {
+            const result = [];
+            const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
+            allPosts.forEach(post => {
+                const authLink = post.querySelector('.authi a[href*="uid"]');
+                if (!authLink) return;
+                const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
+                if (m && m[1] === opUid) {
+                    const pcb = post.querySelector('.pcb');
+                    if (pcb) result.push(pcb);
+                }
+            });
+            return result;
+        }
+
+        async function collectAllOPFloors(firstDoc, threadUrl, progressBtn, chIdx, chTotal) {
+            const tidMatch = threadUrl.match(/tid=(\d+)/) || threadUrl.match(/thread-(\d+)/);
+            const firstPost = firstDoc.querySelector('#postlist > div[id^="post_"]');
+            const opAuthLink = firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null;
+            const opUidMatch = opAuthLink ? (opAuthLink.getAttribute('href') || '').match(/uid[=-](\d+)/) : null;
+
+            if (!opUidMatch || !tidMatch) {
+                const pcb = firstDoc.querySelector('.pcb');
+                return parsePcbToContent(pcb);
+            }
+            const opUid = opUidMatch[1];
+            const tid = tidMatch[1];
+
+            let content = '';
+            extractOPPcbsFromDoc(firstDoc, opUid).forEach(p => {
+                content += parsePcbToContent(p);
+            });
+
+            let maxPage = 1;
+            const pg = firstDoc.querySelector('.pg');
+            if (pg) {
+                pg.querySelectorAll('a').forEach(a => {
+                    const m = (a.getAttribute('href') || '').match(/page=(\d+)/);
+                    if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
+                });
+                const pgLabel = pg.querySelector('label span');
+                if (pgLabel && pgLabel.title) {
+                    const m = pgLabel.title.match(/共\s*(\d+)\s*页/);
+                    if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
+                }
+            }
+
+            for (let p = 2; p <= maxPage; p++) {
+                if (progressBtn) {
+                    setBtnText(progressBtn, `获取章节: ${chIdx + 1} / ${chTotal}（楼主全楼层 第${p}/${maxPage}页…）`);
+                }
+                try {
+                    const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${p}&authorid=${opUid}`;
+                    const res = await fetch(pageUrl);
+                    const html = await res.text();
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    extractOPPcbsFromDoc(doc, opUid).forEach(pcb => {
+                        content += parsePcbToContent(pcb);
+                    });
+                    await new Promise(r => setTimeout(r, 300));
+                } catch (_) { /* 忽略单页失败 */ }
+            }
+
+            return content;
+        }
+
         for (let i = 0; i < links.length; i++) {
             const linkObj = links[i];
             const linkTitle = linkObj.title || `第 ${i + 1} 章`;
             const url = linkObj.url;
+            const fullOp = !!linkObj.fullOpMode;
 
-            setBtnText(btn, `获取章节: ${i + 1} / ${links.length}...`);
+            setBtnText(btn, `获取章节: ${i + 1} / ${links.length}${fullOp ? '（楼主全楼层）' : ''}...`);
             updateProgress(btn, Math.round(((i + 1) / links.length) * 70));
 
             try {
@@ -1661,50 +1809,37 @@ sup {
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(htmlText, 'text/html');
 
-                let pidMatch = url.match(/pid=(\d+)/) || url.match(/#pid(\d+)/);
-                let pcbNode = null;
-
-                if (pidMatch && pidMatch[1]) {
-                    const msgNode = doc.getElementById('postmessage_' + pidMatch[1]);
-                    if (msgNode) {
-                        pcbNode = msgNode.closest('.pcb');
-                    } else {
-                        const postDiv = doc.getElementById('post_' + pidMatch[1]);
-                        if (postDiv) pcbNode = postDiv.querySelector('.pcb');
-                    }
-                }
-
-                if (!pcbNode) {
-                    const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-                    if (allPosts.length > 1 && url.includes('page=') && !url.includes('page=1')) {
-                        pcbNode = allPosts[1].querySelector('.pcb') || doc.querySelector('.pcb');
-                    } else {
-                        pcbNode = doc.querySelector('.pcb');
-                    }
-                }
-
                 let chapterContent = '';
-                if (pcbNode) {
-                    const tfNode = pcbNode.querySelector('.t_f');
-                    if (tfNode) chapterContent += parseToParagraphs(tfNode);
 
-                    const pattlNode = pcbNode.querySelector('.pattl');
-                    if (pattlNode) {
-                        const attachImgs = pattlNode.querySelectorAll('img');
-                        let attachContent = '';
-                        attachImgs.forEach(imgNode => {
-                            let src = imgNode.getAttribute('zoomfile') || imgNode.getAttribute('file') || imgNode.getAttribute('src');
-                            if (src && !src.includes('smiley') && !src.includes('smilies') && !src.includes('none.gif')) {
-                                let wrapper = document.createElement('div');
-                                wrapper.appendChild(imgNode.cloneNode(true));
-                                attachContent += parseToParagraphs(wrapper);
-                            }
-                        });
-                        if (attachContent) chapterContent += `${attachContent}`; 
+                if (fullOp) {
+                    chapterContent = await collectAllOPFloors(doc, url, btn, i, links.length);
+                } else {
+                    let pidMatch = url.match(/pid=(\d+)/) || url.match(/#pid(\d+)/);
+                    let pcbNode = null;
+
+                    if (pidMatch && pidMatch[1]) {
+                        const msgNode = doc.getElementById('postmessage_' + pidMatch[1]);
+                        if (msgNode) {
+                            pcbNode = msgNode.closest('.pcb');
+                        } else {
+                            const postDiv = doc.getElementById('post_' + pidMatch[1]);
+                            if (postDiv) pcbNode = postDiv.querySelector('.pcb');
+                        }
                     }
+
+                    if (!pcbNode) {
+                        const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
+                        if (allPosts.length > 1 && url.includes('page=') && !url.includes('page=1')) {
+                            pcbNode = allPosts[1].querySelector('.pcb') || doc.querySelector('.pcb');
+                        } else {
+                            pcbNode = doc.querySelector('.pcb');
+                        }
+                    }
+
+                    chapterContent += parsePcbToContent(pcbNode);
                 }
 
-                if (!chapterContent.trim()) chapterContent = '<p><i>（未提取到有效内容）</i></p>';
+                if (!chapterContent.trim()) chapterContent = '<p><i>（未提取到有效内容，可在确认面板勾选"全楼层"重试）</i></p>';
                 chapters.push({ title: linkTitle, content: chapterContent, id: `chapter_${i+1}` });
 
                 await new Promise(resolve => setTimeout(resolve, 500));
