@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         百合会下载器
 // @namespace    https://github.com/RRRRUDDDD/yamibo_downloader
-// @version      2.4
+// @version      2.5
 // @description  用于下载百合会的小说与漫画，下载格式可选epub与txt
 // @author       RUD
 // @match        *://bbs.yamibo.com/thread-*
 // @match        *://bbs.yamibo.com/forum.php?mod=viewthread*
 // @match        *://bbs.yamibo.com/misc.php?mod=tag*
-// @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
+// @require      https://cdn.jsdelivr.net/npm/fflate@0.8.3/umd/index.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -1330,6 +1330,278 @@ sup {
         });
     }
 
+    const _htmlParser = new DOMParser();
+    async function fetchHtml(url) {
+        const res = await fetch(url, { headers: { 'Referer': window.location.href } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const html = await res.text();
+        return _htmlParser.parseFromString(html, 'text/html');
+    }
+
+    function getContentImageSrc(imgNode) {
+        return imgNode.getAttribute('zoomfile') || imgNode.getAttribute('file') || imgNode.getAttribute('src');
+    }
+    function isIgnoredImageSrc(src) {
+        return !src || src.includes('smiley') || src.includes('smilies') || src.includes('none.gif');
+    }
+    function getImageExt(absUrl) {
+        const lower = absUrl.toLowerCase();
+        let pathname = lower;
+        try { pathname = new URL(absUrl, window.location.href).pathname.toLowerCase(); } catch (e) {}
+        for (const e of ['png', 'gif', 'webp', 'avif']) {
+            if (pathname.endsWith('.' + e) || lower.startsWith('data:image/' + e)) return e;
+        }
+        if (lower.includes('.png')) return 'png';
+        if (lower.includes('.gif')) return 'gif';
+        if (lower.includes('.webp')) return 'webp';
+        return 'jpg';
+    }
+
+    function getMaxPage(doc) {
+        let maxPage = 1;
+        const pg = doc.querySelector('.pg');
+        if (pg) {
+            pg.querySelectorAll('a').forEach(a => {
+                const m = (a.getAttribute('href') || '').match(/page=(\d+)/);
+                if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
+            });
+            const pgLabel = pg.querySelector('label span');
+            if (pgLabel && pgLabel.title) {
+                const m = pgLabel.title.match(/共\s*(\d+)\s*页/);
+                if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
+            }
+        }
+        return maxPage;
+    }
+    function getThreadTid(url) {
+        const m = url.match(/tid=(\d+)/) || url.match(/thread-(\d+)/);
+        return m ? m[1] : null;
+    }
+    function getPostAuthorUid(authLink) {
+        if (!authLink) return null;
+        const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
+        return m ? m[1] : null;
+    }
+    function runLimitedPool(items, limit, worker) {
+        const results = new Array(items.length);
+        let next = 0;
+        async function runner() {
+            while (next < items.length) {
+                const cur = next++;
+                try { results[cur] = await worker(items[cur], cur); }
+                catch (e) { results[cur] = undefined; }
+            }
+        }
+        const runners = [];
+        const n = Math.min(limit, items.length);
+        for (let i = 0; i < n; i++) runners.push(runner());
+        return Promise.all(runners).then(() => results);
+    }
+
+    function extractOPPcbsFromDoc(doc, opUid) {
+        const result = [];
+        const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
+        allPosts.forEach(post => {
+            const authLink = post.querySelector('.authi a[href*="uid"]');
+            if (!authLink) return;
+            const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
+            if (m && m[1] === opUid) {
+                const pcb = post.querySelector('.pcb');
+                if (pcb) result.push(pcb);
+            }
+        });
+        return result;
+    }
+
+    async function fetchOPFloorsHelper() {
+        let opLinks = [];
+        try {
+            const firstPostDiv = document.querySelector('#postlist > div[id^="post_"]');
+            const opAuthLink = firstPostDiv ? firstPostDiv.querySelector('.authi a') : null;
+            const tid = getThreadTid(window.location.href);
+
+            if (opAuthLink && tid) {
+                const opUid = getPostAuthorUid(opAuthLink);
+                if (opUid) {
+                    let curPage = 1;
+                    let maxPage = 1;
+
+                    while (curPage <= maxPage) {
+                        const pageUrl = window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
+                        const doc = await fetchHtml(pageUrl);
+
+                        if (curPage === 1) {
+                            maxPage = getMaxPage(doc);
+                        }
+
+                        const posts = doc.querySelectorAll('#postlist > div[id^="post_"]');
+                        posts.forEach(post => {
+                            const pid = post.id.replace('post_', '');
+                            const floorNode = post.querySelector('a[id^="postnum"]');
+                            let floorName = `楼层 ${pid}`;
+                            if (floorNode) {
+                                floorName = floorNode.innerText.trim().replace(/[\r\n]/g, '');
+                            }
+                            opLinks.push({
+                                url: window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}&pid=${pid}#pid${pid}`,
+                                title: floorName
+                            });
+                        });
+                        curPage++;
+                        await new Promise(resolve => setTimeout(resolve, 300)); // 延迟防拦截
+                    }
+                }
+            }
+        } catch(err) {
+            console.error('获取楼主楼层失败', err);
+        }
+        return opLinks;
+    }
+
+    function parseToParagraphs(rootNode, imgCtx) {
+        let paragraphs = [];
+        let currentParagraph = '';
+
+        function traverse(node) {
+            if (node.nodeType === Node.TEXT_NODE) {
+                let text = escapeXML(node.textContent.replace(/&/g, '＆')).replace(/[\r\n]+/g, '');
+                currentParagraph += text;
+            } else if (node.nodeType === Node.ELEMENT_NODE) {
+                const tag = node.tagName.toUpperCase();
+
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'HR'].includes(tag)) return;
+                if (node.style && node.style.display === 'none') return;
+                if (node.classList && (node.classList.contains('jammer') || node.classList.contains('pstatus'))) return;
+                if (tag === 'RP') return;
+
+                if (tag === 'BR') {
+                    paragraphs.push(currentParagraph);
+                    currentParagraph = '';
+                    return;
+                }
+
+                if (tag === 'IMG') {
+                    if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
+                    let src = getContentImageSrc(node);
+                    if (!isIgnoredImageSrc(src)) {
+                        let absUrl;
+                        try { absUrl = new URL(src, window.location.href).href; }
+                        catch (e) { console.warn('[yamibo] 跳过无效图片 src:', src); return; }
+                        imgCtx.counter++;
+                        let ext = getImageExt(absUrl);
+
+                        let localFileName = `img_${imgCtx.counter}.${ext}`;
+                        let localPath = `../Images/${localFileName}`;
+                        let mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+
+                        imgCtx.registry.push({ id: `img_${imgCtx.counter}`, url: absUrl, localPath: localPath, fileName: localFileName, mime: mimeType, buffer: null });
+                        paragraphs.push(`<div class="illus duokan-image-single"><img alt="${localFileName}" src="${localPath}" /></div>`);
+                    }
+                    return;
+                }
+
+                if (['DIV', 'P', 'BLOCKQUOTE', 'UL', 'LI', 'IGNORE_JS_OP'].includes(tag)) {
+                    if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
+                    Array.from(node.childNodes).forEach(traverse);
+                    if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
+                    return;
+                }
+
+                if (['B', 'STRONG', 'RUBY', 'RT', 'SPAN'].includes(tag)) {
+                    let before = currentParagraph;
+                    currentParagraph = '';
+                    Array.from(node.childNodes).forEach(traverse);
+                    let inner = currentParagraph;
+                    currentParagraph = before;
+                    if (inner !== '') {
+                        let attrs = '';
+                        if (node.hasAttributes()) {
+                            for (let i = 0; i < node.attributes.length; i++) {
+                                let attr = node.attributes[i];
+                                if (['style', 'color', 'class'].includes(attr.name)) {
+                                    attrs += ` ${attr.name}="${escapeXML(attr.value)}"`;
+                                }
+                            }
+                        }
+                        currentParagraph += `<${tag.toLowerCase()}${attrs}>${inner}</${tag.toLowerCase()}>`;
+                    }
+                    return;
+                }
+                Array.from(node.childNodes).forEach(traverse);
+            }
+        }
+
+        traverse(rootNode);
+        if (currentParagraph !== '') paragraphs.push(currentParagraph);
+
+        while(paragraphs.length > 0 && paragraphs[0].trim() === '') paragraphs.shift();
+        while(paragraphs.length > 0 && paragraphs[paragraphs.length - 1].trim() === '') paragraphs.pop();
+
+        return paragraphs.map(p => {
+            if (p.includes('<div class="illus duokan-image-single">')) return p;
+            if (p.trim() === '') return `<p><br/></p>`;
+            return `<p>${p.replace(/^[\s　\xA0]+/, '')}</p>`;
+        }).join('\n');
+    }
+
+    function parsePcbToContent(pcbNode, imgCtx) {
+        let frag = '';
+        if (!pcbNode) return frag;
+        const tfNode = pcbNode.querySelector('.t_f');
+        if (tfNode) frag += parseToParagraphs(tfNode, imgCtx);
+
+        const pattlNode = pcbNode.querySelector('.pattl');
+        if (pattlNode) {
+            const attachImgs = pattlNode.querySelectorAll('img');
+            let attachContent = '';
+            attachImgs.forEach(imgNode => {
+                let src = getContentImageSrc(imgNode);
+                if (!isIgnoredImageSrc(src)) {
+                    let wrapper = document.createElement('div');
+                    wrapper.appendChild(imgNode.cloneNode(true));
+                    attachContent += parseToParagraphs(wrapper, imgCtx);
+                }
+            });
+            if (attachContent) frag += attachContent;
+        }
+        return frag;
+    }
+
+    async function collectAllOPFloors(firstDoc, threadUrl, progressBtn, chIdx, chTotal, imgCtx) {
+        const tid = getThreadTid(threadUrl);
+        const firstPost = firstDoc.querySelector('#postlist > div[id^="post_"]');
+        const opAuthLink = firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null;
+        const opUid = getPostAuthorUid(opAuthLink);
+
+        if (!opUid || !tid) {
+            const pcb = firstDoc.querySelector('.pcb');
+            return parsePcbToContent(pcb, imgCtx);
+        }
+
+        let content = '';
+        extractOPPcbsFromDoc(firstDoc, opUid).forEach(p => {
+            content += parsePcbToContent(p, imgCtx);
+        });
+
+        const maxPage = getMaxPage(firstDoc);
+
+        for (let p = 2; p <= maxPage; p++) {
+            if (progressBtn) {
+                setBtnText(progressBtn, `获取章节: ${chIdx + 1} / ${chTotal}（楼主全楼层 第${p}/${maxPage}页…）`);
+            }
+            try {
+                const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${p}&authorid=${opUid}`;
+                const doc = await fetchHtml(pageUrl);
+                extractOPPcbsFromDoc(doc, opUid).forEach(pcb => {
+                    content += parsePcbToContent(pcb, imgCtx);
+                });
+                await new Promise(r => setTimeout(r, 300));
+            } catch (err) { console.warn(`[yamibo] 楼主楼层第 ${p} 页抓取失败`, err); }
+        }
+
+        return content;
+    }
+
     function buildModal(links, mode, fetchOPFloorsHelper, onLinksUpdate) {
         return new Promise((resolve) => {
             const overlay = document.createElement('div');
@@ -1495,69 +1767,6 @@ sup {
         let links = [];
         let threadTitle = '';
 
-        // 提取楼主楼层抓取逻辑为独立函数，以便复用
-        async function fetchOPFloorsHelper() {
-            let opLinks = [];
-            try {
-                const firstPostDiv = document.querySelector('#postlist > div[id^="post_"]');
-                const opAuthLink = firstPostDiv ? firstPostDiv.querySelector('.authi a') : null;
-                const tidMatch = window.location.href.match(/tid=(\d+)/) || window.location.href.match(/thread-(\d+)/);
-
-                if (opAuthLink && tidMatch) {
-                    const uidMatch = opAuthLink.getAttribute('href').match(/uid[=-](\d+)/);
-                    const tid = tidMatch[1];
-                    if (uidMatch) {
-                        const opUid = uidMatch[1];
-                        let curPage = 1;
-                        let maxPage = 1;
-
-                        while (curPage <= maxPage) {
-                            const pageUrl = window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
-                            const res = await fetch(pageUrl);
-                            const htmlText = await res.text();
-                            const doc = new DOMParser().parseFromString(htmlText, 'text/html');
-
-                            if (curPage === 1) {
-                                const pg = doc.querySelector('.pg');
-                                if (pg) {
-                                    const pgs = pg.querySelectorAll('a');
-                                    pgs.forEach(a => {
-                                        const href = a.getAttribute('href') || '';
-                                        const m = href.match(/page=(\d+)/);
-                                        if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
-                                    });
-                                    const pgLabel = pg.querySelector('label span');
-                                    if (pgLabel && pgLabel.title) {
-                                        const m = pgLabel.title.match(/共\s*(\d+)\s*页/);
-                                        if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
-                                    }
-                                }
-                            }
-
-                            const posts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-                            posts.forEach(post => {
-                                const pid = post.id.replace('post_', '');
-                                const floorNode = post.querySelector('a[id^="postnum"]');
-                                let floorName = `楼层 ${pid}`;
-                                if (floorNode) {
-                                    floorName = floorNode.innerText.trim().replace(/[\r\n]/g, '');
-                                }
-                                opLinks.push({
-                                    url: window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}&pid=${pid}#pid${pid}`,
-                                    title: floorName
-                                });
-                            });
-                            curPage++;
-                            await new Promise(resolve => setTimeout(resolve, 300)); // 延迟防拦截
-                        }
-                    }
-                }
-            } catch(err) {
-                console.error('获取楼主楼层失败', err);
-            }
-            return opLinks;
-        }
-
         if (mode === 'thread') {
             const firstPost = document.querySelector('.t_f');
             if (!firstPost) { alert('未能定位到一楼内容！'); resetButton(btn, mode); return; }
@@ -1566,7 +1775,7 @@ sup {
                 return rawHref && (rawHref.includes('viewthread') || rawHref.includes('thread-') || rawHref.includes('redirect')) && !rawHref.includes('mod=attachment') && !rawHref.includes('action=reply');
             });
             links = rawLinks.map(a => ({ url: a.href, title: a.innerText.trim() }));
-            threadTitle = document.querySelector('#thread_subject').innerText.trim();
+            threadTitle = (document.querySelector('#thread_subject')?.innerText || document.title || '未命名主题').trim();
 
             if (links.length === 0) {
                 setBtnText(btn, '未检测到链接，正在扫描楼主全部楼层...');
@@ -1615,204 +1824,23 @@ sup {
         links = userSelection.selectedIdxs.map(idx => ({ ...links[idx], fullOpMode: opModeIdxs.has(idx) }));
 
         const chapters = [];
-        const imageRegistry = [];
-        let imageCounter = 0;
+        const imgCtx = { registry: [], counter: 0 };
 
-        function parseToParagraphs(rootNode) {
-            let paragraphs = [];
-            let currentParagraph = '';
-
-            function traverse(node) {
-                if (node.nodeType === Node.TEXT_NODE) {
-                    let text = escapeXML(node.textContent.replace(/&/g, '＆')).replace(/[\r\n]+/g, '');
-                    currentParagraph += text;
-                } else if (node.nodeType === Node.ELEMENT_NODE) {
-                    const tag = node.tagName.toUpperCase();
-
-                    if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'HR'].includes(tag)) return;
-                    if (node.style && node.style.display === 'none') return;
-                    if (node.classList && (node.classList.contains('jammer') || node.classList.contains('pstatus'))) return;
-                    if (tag === 'RP') return;
-
-                    if (tag === 'BR') {
-                        paragraphs.push(currentParagraph);
-                        currentParagraph = '';
-                        return;
-                    }
-
-                    if (tag === 'IMG') {
-                        if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
-                        let src = node.getAttribute('zoomfile') || node.getAttribute('file') || node.getAttribute('src');
-                        if (src && !src.includes('smiley') && !src.includes('smilies') && !src.includes('none.gif')) {
-                            let absUrl = new URL(src, window.location.href).href;
-                            imageCounter++;
-                            let ext = 'jpg';
-                            if (absUrl.toLowerCase().includes('.png') || absUrl.startsWith('data:image/png')) ext = 'png';
-                            else if (absUrl.toLowerCase().includes('.gif') || absUrl.startsWith('data:image/gif')) ext = 'gif';
-                            else if (absUrl.toLowerCase().includes('.webp') || absUrl.startsWith('data:image/webp')) ext = 'webp';
-
-                            let localFileName = `img_${imageCounter}.${ext}`;
-                            let localPath = `../Images/${localFileName}`;
-                            let mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-
-                            imageRegistry.push({ id: `img_${imageCounter}`, url: absUrl, localPath: localPath, fileName: localFileName, mime: mimeType, buffer: null });
-                            paragraphs.push(`<div class="illus duokan-image-single"><img alt="${localFileName}" src="${localPath}" /></div>`);
-                        }
-                        return;
-                    }
-
-                    if (['DIV', 'P', 'BLOCKQUOTE', 'UL', 'LI', 'IGNORE_JS_OP'].includes(tag)) {
-                        if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
-                        Array.from(node.childNodes).forEach(traverse);
-                        if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
-                        return;
-                    }
-
-                    if (['B', 'STRONG', 'RUBY', 'RT', 'SPAN'].includes(tag)) {
-                        let before = currentParagraph;
-                        currentParagraph = '';
-                        Array.from(node.childNodes).forEach(traverse);
-                        let inner = currentParagraph;
-                        currentParagraph = before;
-                        if (inner !== '') {
-                            let attrs = '';
-                            if (node.hasAttributes()) {
-                                for (let i = 0; i < node.attributes.length; i++) {
-                                    let attr = node.attributes[i];
-                                    if (['style', 'color', 'class'].includes(attr.name)) {
-                                        attrs += ` ${attr.name}="${escapeXML(attr.value)}"`;
-                                    }
-                                }
-                            }
-                            currentParagraph += `<${tag.toLowerCase()}${attrs}>${inner}</${tag.toLowerCase()}>`;
-                        }
-                        return;
-                    }
-                    Array.from(node.childNodes).forEach(traverse);
-                }
-            }
-
-            traverse(rootNode);
-            if (currentParagraph !== '') paragraphs.push(currentParagraph);
-
-            while(paragraphs.length > 0 && paragraphs[0].trim() === '') paragraphs.shift();
-            while(paragraphs.length > 0 && paragraphs[paragraphs.length - 1].trim() === '') paragraphs.pop();
-
-            return paragraphs.map(p => {
-                if (p.includes('<div class="illus duokan-image-single">')) return p;
-                if (p.trim() === '') return `<p><br/></p>`;
-                return `<p>${p.replace(/^[\s\u3000\xA0]+/, '')}</p>`;
-            }).join('\n');
-        }
-
-        function parsePcbToContent(pcbNode) {
-            let frag = '';
-            if (!pcbNode) return frag;
-            const tfNode = pcbNode.querySelector('.t_f');
-            if (tfNode) frag += parseToParagraphs(tfNode);
-
-            const pattlNode = pcbNode.querySelector('.pattl');
-            if (pattlNode) {
-                const attachImgs = pattlNode.querySelectorAll('img');
-                let attachContent = '';
-                attachImgs.forEach(imgNode => {
-                    let src = imgNode.getAttribute('zoomfile') || imgNode.getAttribute('file') || imgNode.getAttribute('src');
-                    if (src && !src.includes('smiley') && !src.includes('smilies') && !src.includes('none.gif')) {
-                        let wrapper = document.createElement('div');
-                        wrapper.appendChild(imgNode.cloneNode(true));
-                        attachContent += parseToParagraphs(wrapper);
-                    }
-                });
-                if (attachContent) frag += attachContent;
-            }
-            return frag;
-        }
-
-        function extractOPPcbsFromDoc(doc, opUid) {
-            const result = [];
-            const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-            allPosts.forEach(post => {
-                const authLink = post.querySelector('.authi a[href*="uid"]');
-                if (!authLink) return;
-                const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
-                if (m && m[1] === opUid) {
-                    const pcb = post.querySelector('.pcb');
-                    if (pcb) result.push(pcb);
-                }
-            });
-            return result;
-        }
-
-        async function collectAllOPFloors(firstDoc, threadUrl, progressBtn, chIdx, chTotal) {
-            const tidMatch = threadUrl.match(/tid=(\d+)/) || threadUrl.match(/thread-(\d+)/);
-            const firstPost = firstDoc.querySelector('#postlist > div[id^="post_"]');
-            const opAuthLink = firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null;
-            const opUidMatch = opAuthLink ? (opAuthLink.getAttribute('href') || '').match(/uid[=-](\d+)/) : null;
-
-            if (!opUidMatch || !tidMatch) {
-                const pcb = firstDoc.querySelector('.pcb');
-                return parsePcbToContent(pcb);
-            }
-            const opUid = opUidMatch[1];
-            const tid = tidMatch[1];
-
-            let content = '';
-            extractOPPcbsFromDoc(firstDoc, opUid).forEach(p => {
-                content += parsePcbToContent(p);
-            });
-
-            let maxPage = 1;
-            const pg = firstDoc.querySelector('.pg');
-            if (pg) {
-                pg.querySelectorAll('a').forEach(a => {
-                    const m = (a.getAttribute('href') || '').match(/page=(\d+)/);
-                    if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
-                });
-                const pgLabel = pg.querySelector('label span');
-                if (pgLabel && pgLabel.title) {
-                    const m = pgLabel.title.match(/共\s*(\d+)\s*页/);
-                    if (m && parseInt(m[1], 10) > maxPage) maxPage = parseInt(m[1], 10);
-                }
-            }
-
-            for (let p = 2; p <= maxPage; p++) {
-                if (progressBtn) {
-                    setBtnText(progressBtn, `获取章节: ${chIdx + 1} / ${chTotal}（楼主全楼层 第${p}/${maxPage}页…）`);
-                }
-                try {
-                    const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${p}&authorid=${opUid}`;
-                    const res = await fetch(pageUrl);
-                    const html = await res.text();
-                    const doc = new DOMParser().parseFromString(html, 'text/html');
-                    extractOPPcbsFromDoc(doc, opUid).forEach(pcb => {
-                        content += parsePcbToContent(pcb);
-                    });
-                    await new Promise(r => setTimeout(r, 300));
-                } catch (_) { /* 忽略单页失败 */ }
-            }
-
-            return content;
-        }
-
-        for (let i = 0; i < links.length; i++) {
-            const linkObj = links[i];
+        const CHAPTER_CONCURRENCY = 2;
+        let chapterDone = 0;
+        const chapterResults = await runLimitedPool(links, CHAPTER_CONCURRENCY, async (linkObj, i) => {
             const linkTitle = linkObj.title || `第 ${i + 1} 章`;
             const url = linkObj.url;
             const fullOp = !!linkObj.fullOpMode;
-
-            setBtnText(btn, `获取章节: ${i + 1} / ${links.length}${fullOp ? '（楼主全楼层）' : ''}...`);
-            updateProgress(btn, Math.round(((i + 1) / links.length) * 70));
+            let result;
 
             try {
-                const response = await fetch(url);
-                const htmlText = await response.text();
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(htmlText, 'text/html');
+                const doc = await fetchHtml(url);
 
                 let chapterContent = '';
 
                 if (fullOp) {
-                    chapterContent = await collectAllOPFloors(doc, url, btn, i, links.length);
+                    chapterContent = await collectAllOPFloors(doc, url, null, i, links.length, imgCtx);
                 } else {
                     let pidMatch = url.match(/pid=(\d+)/) || url.match(/#pid(\d+)/);
                     let pcbNode = null;
@@ -1836,23 +1864,28 @@ sup {
                         }
                     }
 
-                    chapterContent += parsePcbToContent(pcbNode);
+                    chapterContent += parsePcbToContent(pcbNode, imgCtx);
                 }
 
                 if (!chapterContent.trim()) chapterContent = '<p><i>（未提取到有效内容，可在确认面板勾选"全楼层"重试）</i></p>';
-                chapters.push({ title: linkTitle, content: chapterContent, id: `chapter_${i+1}` });
-
-                await new Promise(resolve => setTimeout(resolve, 500));
+                result = { title: linkTitle, content: chapterContent, id: `chapter_${i+1}` };
             } catch (err) {
-                chapters.push({ title: linkTitle, content: '<p><i>（网络请求失败）</i></p>', id: `chapter_${i+1}` });
+                result = { title: linkTitle, content: '<p><i>（网络请求失败）</i></p>', id: `chapter_${i+1}` };
             }
-        }
 
-        if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && imageRegistry.length > 0) {
-            for (let i = 0; i < imageRegistry.length; i++) {
-                const img = imageRegistry[i];
-                setBtnText(btn, `下载插图: ${i + 1} / ${imageRegistry.length}...`);
-                updateProgress(btn, 70 + Math.round(((i + 1) / imageRegistry.length) * 25));
+            chapterDone++;
+            setBtnText(btn, `获取章节: ${chapterDone} / ${links.length}...`);
+            updateProgress(btn, Math.round((chapterDone / links.length) * 70));
+            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 300));
+            return result;
+        });
+        chapterResults.forEach(r => { if (r) chapters.push(r); });
+
+        if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && imgCtx.registry.length > 0) {
+            const IMAGE_CONCURRENCY = 3;
+            let imgDone = 0;
+            const failedImages = [];
+            await runLimitedPool(imgCtx.registry, IMAGE_CONCURRENCY, async (img) => {
                 try {
                     if (img.url.startsWith('data:image')) {
                         const res = await fetch(img.url);
@@ -1860,11 +1893,16 @@ sup {
                     } else {
                         img.buffer = await fetchImageBuffer(img.url);
                     }
-                    await new Promise(resolve => setTimeout(resolve, 150));
                 } catch (err) {
                     console.warn(`插图下载失败: ${img.url}`, err);
+                    failedImages.push(img.fileName);
                 }
-            }
+                imgDone++;
+                setBtnText(btn, `下载插图: ${imgDone} / ${imgCtx.registry.length}...`);
+                updateProgress(btn, 70 + Math.round((imgDone / imgCtx.registry.length) * 25));
+                await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 150));
+            });
+            if (failedImages.length > 0) console.warn(`[yamibo] 共 ${failedImages.length} 张插图下载失败，已用占位图替代`);
         }
 
         setBtnText(btn, '正在打包中...');
@@ -1877,7 +1915,7 @@ sup {
                 generateTXT(threadTitle, chapters);
             }
             if (currentFormat === 'EPUB' || currentFormat === 'BOTH') {
-                generateEPUB(threadTitle, chapters, imageRegistry, btn, mode);
+                generateEPUB(threadTitle, chapters, imgCtx.registry, btn, mode);
             } else {
                 setBtnText(btn, '下载完成！');
                 updateProgress(btn, 100);
