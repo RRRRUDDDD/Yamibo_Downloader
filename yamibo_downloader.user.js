@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         百合会下载器
 // @namespace    https://github.com/RRRRUDDDD/yamibo_downloader
-// @version      2.5
+// @version      2.6
 // @description  用于下载百合会的小说与漫画，下载格式可选epub与txt
 // @author       RUD
 // @match        *://bbs.yamibo.com/thread-*
@@ -1231,8 +1231,143 @@ sup {
     gap: 8px !important;
     margin-top: 10px !important;
 }
+
+/* ===== 取消按钮 ===== */
+#yd-cancel-btn {
+    background: var(--yd-bg) !important;
+    color: var(--yd-text-secondary) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 8px 16px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    cursor: pointer !important;
+    box-shadow: 3px 3px 8px var(--yd-shadow-dark),
+                -3px -3px 8px var(--yd-shadow-light-md) !important;
+    margin-left: 10px !important;
+    font-family: var(--yd-font) !important;
+    transition: box-shadow var(--yd-transition), color var(--yd-transition) !important;
+}
+#yd-cancel-btn:hover {
+    color: var(--yd-primary) !important;
+    box-shadow: 5px 5px 10px var(--yd-shadow-dark-hover),
+                -5px -5px 10px var(--yd-shadow-light-lg) !important;
+}
+#yd-cancel-btn:disabled {
+    opacity: 0.7 !important;
+    cursor: not-allowed !important;
+}
+
+/* ===== Toast 提示 ===== */
+#yd-toast-wrap {
+    position: fixed !important;
+    top: 24px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 10001 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 10px !important;
+    pointer-events: none !important;
+}
+.yd-toast {
+    background: var(--yd-bg) !important;
+    color: var(--yd-text) !important;
+    border-radius: 12px !important;
+    padding: 12px 22px !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    max-width: 70vw !important;
+    word-break: break-all !important;
+    box-shadow: 6px 6px 14px var(--yd-shadow-dark-md),
+                -6px -6px 14px var(--yd-shadow-light-md) !important;
+    font-family: var(--yd-font) !important;
+    opacity: 0 !important;
+    transform: translateY(-8px) !important;
+    transition: opacity 250ms ease, transform 250ms ease !important;
+}
+.yd-toast.yd-show {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+}
+.yd-toast.yd-toast-error {
+    color: #a02020 !important;
+    font-weight: 600 !important;
+}
+
+/* ===== 确认弹窗 ===== */
+#yd-modal.yd-modal-sm {
+    max-width: 440px !important;
+    width: auto !important;
+    min-width: 320px !important;
+}
+.yd-confirm-msg {
+    font-size: 14px !important;
+    line-height: 1.7 !important;
+    color: var(--yd-text) !important;
+    margin-bottom: 20px !important;
+    white-space: pre-wrap !important;
+    word-break: break-all !important;
+}
 `;
     (document.head || document.documentElement).appendChild(SOFTUI_STYLE);
+
+    function ydToast(message, type = 'info', duration = 4000) {
+        let wrap = document.getElementById('yd-toast-wrap');
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.id = 'yd-toast-wrap';
+            document.body.appendChild(wrap);
+        }
+        const t = document.createElement('div');
+        t.className = 'yd-toast' + (type === 'error' ? ' yd-toast-error' : '');
+        t.textContent = message;
+        wrap.appendChild(t);
+        requestAnimationFrame(() => t.classList.add('yd-show'));
+        setTimeout(() => {
+            t.classList.remove('yd-show');
+            setTimeout(() => t.remove(), 300);
+        }, duration);
+    }
+
+    function ydConfirm(message, okText = '确定', cancelText = '取消') {
+        return new Promise(resolve => {
+            const overlay = document.createElement('div');
+            overlay.id = 'yd-overlay';
+            const modal = document.createElement('div');
+            modal.id = 'yd-modal';
+            modal.className = 'yd-modal-sm';
+
+            const msg = document.createElement('div');
+            msg.className = 'yd-confirm-msg';
+            msg.textContent = message;
+            modal.appendChild(msg);
+
+            const actions = document.createElement('div');
+            actions.className = 'yd-actions';
+            actions.style.justifyContent = 'flex-end';
+            const group = document.createElement('div');
+            group.className = 'yd-btn-group';
+
+            const close = (val) => { overlay.remove(); resolve(val); };
+            const cBtn = document.createElement('button');
+            cBtn.className = 'yd-btn-secondary';
+            cBtn.innerText = cancelText;
+            cBtn.onclick = () => close(false);
+            const oBtn = document.createElement('button');
+            oBtn.className = 'yd-btn-primary';
+            oBtn.innerText = okText;
+            oBtn.onclick = () => close(true);
+
+            group.appendChild(cBtn);
+            group.appendChild(oBtn);
+            actions.appendChild(group);
+            modal.appendChild(actions);
+            overlay.appendChild(modal);
+            document.body.appendChild(overlay);
+        });
+    }
 
     function getPageMode() {
         const href = window.location.href;
@@ -1331,11 +1466,20 @@ sup {
     }
 
     const _htmlParser = new DOMParser();
-    async function fetchHtml(url) {
-        const res = await fetch(url, { headers: { 'Referer': window.location.href } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const html = await res.text();
-        return _htmlParser.parseFromString(html, 'text/html');
+    async function fetchHtml(url, retries = 2) {
+        let lastErr;
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+                const res = await fetch(url, { headers: { 'Referer': window.location.href } });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const html = await res.text();
+                return _htmlParser.parseFromString(html, 'text/html');
+            } catch (err) {
+                lastErr = err;
+                if (attempt < retries) await new Promise(r => setTimeout(r, 500 * (attempt + 1) + Math.random() * 300));
+            }
+        }
+        throw lastErr;
     }
 
     function getContentImageSrc(imgNode) {
@@ -1403,9 +1547,7 @@ sup {
         const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
         allPosts.forEach(post => {
             const authLink = post.querySelector('.authi a[href*="uid"]');
-            if (!authLink) return;
-            const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
-            if (m && m[1] === opUid) {
+            if (getPostAuthorUid(authLink) === opUid) {
                 const pcb = post.querySelector('.pcb');
                 if (pcb) result.push(pcb);
             }
@@ -1413,45 +1555,47 @@ sup {
         return result;
     }
 
+    // 按 authorid 过滤逐页抓取楼主楼层；onPage 返回 false 可提前终止
+    async function forEachOPPage(tid, opUid, onPage) {
+        let curPage = 1;
+        let maxPage = 1;
+        while (curPage <= maxPage) {
+            try {
+                const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
+                const doc = await fetchHtml(pageUrl);
+                if (curPage === 1) maxPage = getMaxPage(doc);
+                if (onPage(doc, curPage, maxPage) === false) return;
+            } catch (err) {
+                if (curPage === 1) throw err; // 首页失败无法确定总页数，整体失败交由上层处理
+                console.warn(`[yamibo] 楼主楼层第 ${curPage} 页抓取失败`, err);
+            }
+            curPage++;
+            if (curPage <= maxPage) await new Promise(resolve => setTimeout(resolve, 300)); // 延迟防拦截
+        }
+    }
+
     async function fetchOPFloorsHelper() {
-        let opLinks = [];
+        const opLinks = [];
         try {
             const firstPostDiv = document.querySelector('#postlist > div[id^="post_"]');
-            const opAuthLink = firstPostDiv ? firstPostDiv.querySelector('.authi a') : null;
+            const opUid = getPostAuthorUid(firstPostDiv ? firstPostDiv.querySelector('.authi a[href*="uid"]') : null);
             const tid = getThreadTid(window.location.href);
+            if (!opUid || !tid) return opLinks;
 
-            if (opAuthLink && tid) {
-                const opUid = getPostAuthorUid(opAuthLink);
-                if (opUid) {
-                    let curPage = 1;
-                    let maxPage = 1;
-
-                    while (curPage <= maxPage) {
-                        const pageUrl = window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
-                        const doc = await fetchHtml(pageUrl);
-
-                        if (curPage === 1) {
-                            maxPage = getMaxPage(doc);
-                        }
-
-                        const posts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-                        posts.forEach(post => {
-                            const pid = post.id.replace('post_', '');
-                            const floorNode = post.querySelector('a[id^="postnum"]');
-                            let floorName = `楼层 ${pid}`;
-                            if (floorNode) {
-                                floorName = floorNode.innerText.trim().replace(/[\r\n]/g, '');
-                            }
-                            opLinks.push({
-                                url: window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}&pid=${pid}#pid${pid}`,
-                                title: floorName
-                            });
-                        });
-                        curPage++;
-                        await new Promise(resolve => setTimeout(resolve, 300)); // 延迟防拦截
+            await forEachOPPage(tid, opUid, (doc, curPage) => {
+                doc.querySelectorAll('#postlist > div[id^="post_"]').forEach(post => {
+                    const pid = post.id.replace('post_', '');
+                    const floorNode = post.querySelector('a[id^="postnum"]');
+                    let floorName = `楼层 ${pid}`;
+                    if (floorNode) {
+                        floorName = floorNode.innerText.trim().replace(/[\r\n]/g, '');
                     }
-                }
-            }
+                    opLinks.push({
+                        url: window.location.origin + `/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}&pid=${pid}#pid${pid}`,
+                        title: floorName
+                    });
+                });
+            });
         } catch(err) {
             console.error('获取楼主楼层失败', err);
         }
@@ -1469,7 +1613,7 @@ sup {
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 const tag = node.tagName.toUpperCase();
 
-                if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'HR'].includes(tag)) return;
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(tag)) return;
                 if (node.style && node.style.display === 'none') return;
                 if (node.classList && (node.classList.contains('jammer') || node.classList.contains('pstatus'))) return;
                 if (tag === 'RP') return;
@@ -1480,6 +1624,12 @@ sup {
                     return;
                 }
 
+                if (tag === 'HR') {
+                    if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
+                    paragraphs.push('<div class="s-hr1"></div>');
+                    return;
+                }
+
                 if (tag === 'IMG') {
                     if (currentParagraph !== '') { paragraphs.push(currentParagraph); currentParagraph = ''; }
                     let src = getContentImageSrc(node);
@@ -1487,15 +1637,18 @@ sup {
                         let absUrl;
                         try { absUrl = new URL(src, window.location.href).href; }
                         catch (e) { console.warn('[yamibo] 跳过无效图片 src:', src); return; }
-                        imgCtx.counter++;
-                        let ext = getImageExt(absUrl);
 
-                        let localFileName = `img_${imgCtx.counter}.${ext}`;
-                        let localPath = `../Images/${localFileName}`;
-                        let mimeType = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-
-                        imgCtx.registry.push({ id: `img_${imgCtx.counter}`, url: absUrl, localPath: localPath, fileName: localFileName, mime: mimeType, buffer: null });
-                        paragraphs.push(`<div class="illus duokan-image-single"><img alt="${localFileName}" src="${localPath}" /></div>`);
+                        // 按 URL 去重：同图复用已注册条目，避免重复下载与重复打包
+                        let entry = imgCtx.urlMap.get(absUrl);
+                        if (!entry) {
+                            imgCtx.counter++;
+                            let ext = getImageExt(absUrl);
+                            let localFileName = `img_${imgCtx.counter}.${ext}`;
+                            entry = { id: `img_${imgCtx.counter}`, url: absUrl, localPath: `../Images/${localFileName}`, fileName: localFileName, mime: `image/${ext === 'jpg' ? 'jpeg' : ext}`, buffer: null };
+                            imgCtx.registry.push(entry);
+                            imgCtx.urlMap.set(absUrl, entry);
+                        }
+                        paragraphs.push(`<div class="illus duokan-image-single"><img alt="${entry.fileName}" src="${entry.localPath}" /></div>`);
                     }
                     return;
                 }
@@ -1539,6 +1692,7 @@ sup {
 
         return paragraphs.map(p => {
             if (p.includes('<div class="illus duokan-image-single">')) return p;
+            if (p.includes('<div class="s-hr1"')) return p;
             if (p.trim() === '') return `<p><br/></p>`;
             return `<p>${p.replace(/^[\s　\xA0]+/, '')}</p>`;
         }).join('\n');
@@ -1567,7 +1721,7 @@ sup {
         return frag;
     }
 
-    async function collectAllOPFloors(firstDoc, threadUrl, progressBtn, chIdx, chTotal, imgCtx) {
+    async function collectAllOPFloors(firstDoc, threadUrl, imgCtx, cancelToken) {
         const tid = getThreadTid(threadUrl);
         const firstPost = firstDoc.querySelector('#postlist > div[id^="post_"]');
         const opAuthLink = firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null;
@@ -1578,26 +1732,14 @@ sup {
             return parsePcbToContent(pcb, imgCtx);
         }
 
+        // 从第 1 页起按 authorid 过滤抓取，保证翻页边界与过滤后的实际页数一致
         let content = '';
-        extractOPPcbsFromDoc(firstDoc, opUid).forEach(p => {
-            content += parsePcbToContent(p, imgCtx);
+        await forEachOPPage(tid, opUid, (doc) => {
+            if (cancelToken && cancelToken.cancelled) return false;
+            extractOPPcbsFromDoc(doc, opUid).forEach(pcb => {
+                content += parsePcbToContent(pcb, imgCtx);
+            });
         });
-
-        const maxPage = getMaxPage(firstDoc);
-
-        for (let p = 2; p <= maxPage; p++) {
-            if (progressBtn) {
-                setBtnText(progressBtn, `获取章节: ${chIdx + 1} / ${chTotal}（楼主全楼层 第${p}/${maxPage}页…）`);
-            }
-            try {
-                const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${p}&authorid=${opUid}`;
-                const doc = await fetchHtml(pageUrl);
-                extractOPPcbsFromDoc(doc, opUid).forEach(pcb => {
-                    content += parsePcbToContent(pcb, imgCtx);
-                });
-                await new Promise(r => setTimeout(r, 300));
-            } catch (err) { console.warn(`[yamibo] 楼主楼层第 ${p} 页抓取失败`, err); }
-        }
 
         return content;
     }
@@ -1650,7 +1792,7 @@ sup {
             filterPanel.className = 'yd-filter-panel';
             filterPanel.innerHTML = `
                 <input type="text" class="yd-filter-input" id="yd-filter-expr" placeholder="">
-                <div class="yd-filter-hint">通过序号进行快速筛选，语法：99 = 第99章 | 9-99 = 第9~99章 | 9- = 第9章起 | -99 = 到第99章。也可通过如1-5, 8, 12-组合使用（逗号分隔）</div>
+                <div class="yd-filter-hint">序号筛选：99 = 第99章 | 9-99 = 第9~99章 | 9- = 第9章起 | -99 = 到第99章，可用逗号组合（如 1-5, 8, 12-）。也可直接输入标题关键词（如：番外），多个关键词用逗号分隔，任一命中即选中</div>
                 <div class="yd-filter-actions">
                     <button class="yd-ctrl-btn" id="btn-filter-cancel">收起</button>
                     <button class="yd-btn-primary yd-btn-sm" id="btn-filter-apply">应用</button>
@@ -1744,8 +1886,17 @@ sup {
                 const expr = overlay.querySelector('#yd-filter-expr').value.trim();
                 if (!expr) return;
                 const cbs = overlay.querySelectorAll('.chap-cb');
-                const matched = parseFilterExpr(expr, cbs.length);
-                cbs.forEach(cb => { cb.checked = matched.has(parseInt(cb.value)); });
+                if (/^[\d\s,，-]+$/.test(expr)) {
+                    const matched = parseFilterExpr(expr.replace(/，/g, ','), cbs.length);
+                    cbs.forEach(cb => { cb.checked = matched.has(parseInt(cb.value)); });
+                } else {
+                    // 含非序号字符时按标题关键词筛选，多个关键词逗号分隔、任一命中即选中
+                    const keywords = expr.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+                    cbs.forEach(cb => {
+                        const title = (links[parseInt(cb.value)] || {}).title || '';
+                        cb.checked = keywords.some(k => title.includes(k));
+                    });
+                }
                 filterPanel.classList.remove('yd-open');
             };
             overlay.querySelector('#yd-filter-expr').onkeydown = (e) => {
@@ -1759,23 +1910,26 @@ sup {
         btn.disabled = true;
 
         if (typeof fflate === 'undefined' && (currentFormat === 'EPUB' || currentFormat === 'BOTH')) {
-            alert('fflate 打包引擎未加载，请刷新页面。');
+            ydToast('fflate 打包引擎未加载，请刷新页面。', 'error');
             resetButton(btn, getPageMode()); return;
         }
 
         const mode = getPageMode();
         let links = [];
         let threadTitle = '';
+        let bookAuthor = '';
 
         if (mode === 'thread') {
             const firstPost = document.querySelector('.t_f');
-            if (!firstPost) { alert('未能定位到一楼内容！'); resetButton(btn, mode); return; }
+            if (!firstPost) { ydToast('未能定位到一楼内容！', 'error'); resetButton(btn, mode); return; }
             const rawLinks = Array.from(firstPost.querySelectorAll('a')).filter(a => {
                 const rawHref = a.getAttribute('href');
                 return rawHref && (rawHref.includes('viewthread') || rawHref.includes('thread-') || rawHref.includes('redirect')) && !rawHref.includes('mod=attachment') && !rawHref.includes('action=reply');
             });
             links = rawLinks.map(a => ({ url: a.href, title: a.innerText.trim() }));
             threadTitle = (document.querySelector('#thread_subject')?.innerText || document.title || '未命名主题').trim();
+            const opAuthLink = document.querySelector('#postlist > div[id^="post_"] .authi a[href*="uid"]');
+            bookAuthor = opAuthLink ? opAuthLink.innerText.trim() : '';
 
             if (links.length === 0) {
                 setBtnText(btn, '未检测到链接，正在扫描楼主全部楼层...');
@@ -1802,8 +1956,8 @@ sup {
             threadTitle = tagMatch ? tagMatch[1].trim() : '标签合集';
         }
 
-        if (links.length === 0) { alert('没有找到有效的帖子链接，且抓取楼主楼层失败！'); resetButton(btn, mode); return; }
-        threadTitle = threadTitle.replace(/[\\/:*?"<>|]/g, '');
+        if (links.length === 0) { ydToast('没有找到有效的帖子链接，且抓取楼主楼层失败！', 'error'); resetButton(btn, mode); return; }
+        threadTitle = threadTitle.replace(/[\\/:*?"<>|]/g, '').replace(/[.\s]+$/, '') || '未命名主题';
 
         const userSelection = await buildModal(links, mode, fetchOPFloorsHelper, (newLinks) => { links = newLinks; });
 
@@ -1813,7 +1967,7 @@ sup {
         }
 
         if (userSelection.selectedIdxs.length === 0) {
-            alert('必须至少选择一个章节！');
+            ydToast('必须至少选择一个章节！', 'error');
             resetButton(btn, mode);
             return;
         }
@@ -1823,26 +1977,37 @@ sup {
         const opModeIdxs = userSelection.opModeIdxs || new Set();
         links = userSelection.selectedIdxs.map(idx => ({ ...links[idx], fullOpMode: opModeIdxs.has(idx) }));
 
-        const chapters = [];
-        const imgCtx = { registry: [], counter: 0 };
+        const imgCtx = { registry: [], counter: 0, urlMap: new Map() };
+        const cancelToken = { cancelled: false };
 
-        const CHAPTER_CONCURRENCY = 2;
-        let chapterDone = 0;
-        const chapterResults = await runLimitedPool(links, CHAPTER_CONCURRENCY, async (linkObj, i) => {
+        const cancelBtn = document.createElement('button');
+        cancelBtn.id = 'yd-cancel-btn';
+        cancelBtn.innerText = '取消下载';
+        cancelBtn.onclick = () => {
+            cancelToken.cancelled = true;
+            cancelBtn.disabled = true;
+            cancelBtn.innerText = '取消中...';
+        };
+        btn.insertAdjacentElement('afterend', cancelBtn);
+
+        function bailIfCancelled() {
+            if (!cancelToken.cancelled) return false;
+            resetButton(btn, mode);
+            ydToast('已取消下载');
+            return true;
+        }
+
+        async function fetchOneChapter(linkObj, i) {
             const linkTitle = linkObj.title || `第 ${i + 1} 章`;
-            const url = linkObj.url;
-            const fullOp = !!linkObj.fullOpMode;
-            let result;
-
             try {
-                const doc = await fetchHtml(url);
+                const doc = await fetchHtml(linkObj.url);
 
                 let chapterContent = '';
 
-                if (fullOp) {
-                    chapterContent = await collectAllOPFloors(doc, url, null, i, links.length, imgCtx);
+                if (linkObj.fullOpMode) {
+                    chapterContent = await collectAllOPFloors(doc, linkObj.url, imgCtx, cancelToken);
                 } else {
-                    let pidMatch = url.match(/pid=(\d+)/) || url.match(/#pid(\d+)/);
+                    let pidMatch = linkObj.url.match(/pid=(\d+)/) || linkObj.url.match(/#pid(\d+)/);
                     let pcbNode = null;
 
                     if (pidMatch && pidMatch[1]) {
@@ -1857,7 +2022,7 @@ sup {
 
                     if (!pcbNode) {
                         const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-                        if (allPosts.length > 1 && url.includes('page=') && !url.includes('page=1')) {
+                        if (allPosts.length > 1 && linkObj.url.includes('page=') && !linkObj.url.includes('page=1')) {
                             pcbNode = allPosts[1].querySelector('.pcb') || doc.querySelector('.pcb');
                         } else {
                             pcbNode = doc.querySelector('.pcb');
@@ -1868,17 +2033,46 @@ sup {
                 }
 
                 if (!chapterContent.trim()) chapterContent = '<p><i>（未提取到有效内容，可在确认面板勾选"全楼层"重试）</i></p>';
-                result = { title: linkTitle, content: chapterContent, id: `chapter_${i+1}` };
+                return { title: linkTitle, content: chapterContent, id: `chapter_${i+1}`, failed: false };
             } catch (err) {
-                result = { title: linkTitle, content: '<p><i>（网络请求失败）</i></p>', id: `chapter_${i+1}` };
+                console.warn(`[yamibo] 章节「${linkTitle}」抓取失败`, err);
+                return { title: linkTitle, content: '<p><i>（网络请求失败）</i></p>', id: `chapter_${i+1}`, failed: true };
             }
+        }
 
+        const CHAPTER_CONCURRENCY = 2;
+        let chapterDone = 0;
+        const chapterResults = await runLimitedPool(links, CHAPTER_CONCURRENCY, async (linkObj, i) => {
+            if (cancelToken.cancelled) return undefined;
+            const result = await fetchOneChapter(linkObj, i);
             chapterDone++;
             setBtnText(btn, `获取章节: ${chapterDone} / ${links.length}...`);
             updateProgress(btn, Math.round((chapterDone / links.length) * 70));
             await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 300));
             return result;
         });
+        if (bailIfCancelled()) return;
+
+        // 失败章节重试：打包前征求用户意见，可多轮重试
+        let failedIdxs = [];
+        chapterResults.forEach((r, i) => { if (r && r.failed) failedIdxs.push(i); });
+        while (failedIdxs.length > 0 && !cancelToken.cancelled) {
+            const names = failedIdxs.slice(0, 5).map(i => chapterResults[i].title).join('、') + (failedIdxs.length > 5 ? ' …' : '');
+            const doRetry = await ydConfirm(`有 ${failedIdxs.length} 个章节抓取失败：\n${names}\n是否重试这些章节？`, '重试', '跳过');
+            if (!doRetry) break;
+            let retryDone = 0;
+            await runLimitedPool(failedIdxs, CHAPTER_CONCURRENCY, async (idx) => {
+                if (cancelToken.cancelled) return;
+                chapterResults[idx] = await fetchOneChapter(links[idx], idx);
+                retryDone++;
+                setBtnText(btn, `重试章节: ${retryDone} / ${failedIdxs.length}...`);
+                await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 300));
+            });
+            failedIdxs = failedIdxs.filter(i => chapterResults[i] && chapterResults[i].failed);
+        }
+        if (bailIfCancelled()) return;
+
+        const chapters = [];
         chapterResults.forEach(r => { if (r) chapters.push(r); });
 
         if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && imgCtx.registry.length > 0) {
@@ -1886,6 +2080,7 @@ sup {
             let imgDone = 0;
             const failedImages = [];
             await runLimitedPool(imgCtx.registry, IMAGE_CONCURRENCY, async (img) => {
+                if (cancelToken.cancelled) return;
                 try {
                     if (img.url.startsWith('data:image')) {
                         const res = await fetch(img.url);
@@ -1904,6 +2099,13 @@ sup {
             });
             if (failedImages.length > 0) console.warn(`[yamibo] 共 ${failedImages.length} 张插图下载失败，已用占位图替代`);
         }
+        if (bailIfCancelled()) return;
+
+        cancelBtn.remove();
+        if (failedIdxs.length > 0) {
+            const names = failedIdxs.slice(0, 5).map(i => chapterResults[i].title).join('、') + (failedIdxs.length > 5 ? ' …' : '');
+            ydToast(`仍有 ${failedIdxs.length} 个章节抓取失败，已用占位内容代替：${names}`, 'error', 8000);
+        }
 
         setBtnText(btn, '正在打包中...');
         updateProgress(btn, 98);
@@ -1915,7 +2117,7 @@ sup {
                 generateTXT(threadTitle, chapters);
             }
             if (currentFormat === 'EPUB' || currentFormat === 'BOTH') {
-                generateEPUB(threadTitle, chapters, imgCtx.registry, btn, mode);
+                generateEPUB(threadTitle, chapters, imgCtx.registry, btn, mode, bookAuthor);
             } else {
                 setBtnText(btn, '下载完成！');
                 updateProgress(btn, 100);
@@ -1942,6 +2144,8 @@ sup {
 
     function resetButton(btn, mode) {
         btn.disabled = false;
+        const cancelBtn = document.getElementById('yd-cancel-btn');
+        if (cancelBtn) cancelBtn.remove();
         const wrap = btn.querySelector('#yd-progress-wrap');
         const bar = btn.querySelector('#yd-progress-bar');
         if (wrap) wrap.style.display = 'none';
@@ -2035,10 +2239,18 @@ sup {
         URL.revokeObjectURL(downloadUrl);
     }
 
-    function generateEPUB(title, chapters, images, btn, mode) {
+    function generateEPUB(title, chapters, images, btn, mode, author) {
         const safeTitle = escapeXML(title);
         const safeUrl = escapeXML(window.location.href);
-        const bookUUID = `urn:uuid:yamibo-${Date.now()}`;
+        const safeAuthor = escapeXML(author || '佚名');
+        const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+                const r = Math.random() * 16 | 0;
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        const bookUUID = `urn:uuid:${uuid}`;
+        const modifiedDate = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
         const epubObj = {
             "mimetype": [fflate.strToU8("application/epub+zip"), { level: 0 }],
@@ -2054,10 +2266,11 @@ sup {
 
         const dummy1x1 = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 8, 215, 99, 96, 0, 2, 0, 0, 5, 0, 1, 226, 38, 5, 155, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);
 
-        images.forEach(img => {
+        images.forEach((img, idx) => {
             if (img.buffer && img.buffer.byteLength > 0) epubObj.OEBPS.Images[img.fileName] = new Uint8Array(img.buffer);
             else { epubObj.OEBPS.Images[img.fileName] = dummy1x1; img.mime = 'image/png'; }
-            manifestItems += `<item id="${img.id}" href="Images/${img.fileName}" media-type="${img.mime}"/>\n`;
+            const coverProp = idx === 0 ? ' properties="cover-image"' : '';
+            manifestItems += `<item id="${img.id}" href="Images/${img.fileName}" media-type="${img.mime}"${coverProp}/>\n`;
         });
 
         chapters.forEach((ch, index) => {
@@ -2066,8 +2279,8 @@ sup {
 
             epubObj.OEBPS.Text[htmlFileName] = fflate.strToU8(
 `<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:xml="http://www.w3.org/XML/1998/namespace">
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" xmlns:epub="http://www.idpf.org/2007/ops">
 <head>
     <title>${safeChTitle}</title>
     <link href="../Styles/style.css" rel="stylesheet" type="text/css" />
@@ -2083,22 +2296,69 @@ sup {
             navPoints += `<navPoint id="navPoint-${index + 1}" playOrder="${index + 1}"><navLabel><text>${safeChTitle}</text></navLabel><content src="Text/${htmlFileName}"/></navPoint>`;
         });
 
+        // 可视目录页（书内第一页，复用 CUSTOM_CSS 的 .contents / .mulu 样式）
+        const tocEntries = chapters.map(ch => `<p class="mulu"><a href="${ch.id}.xhtml">${escapeXML(ch.title)}</a></p>`).join('\n');
+        epubObj.OEBPS.Text["toc.xhtml"] = fflate.strToU8(
+`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN">
+<head>
+    <title>目录</title>
+    <link href="../Styles/style.css" rel="stylesheet" type="text/css" />
+</head>
+<body>
+    <h4>目录</h4>
+    <div class="contents">
+${tocEntries}
+    </div>
+</body>
+</html>`);
+
+        // EPUB3 导航文档（阅读器目录入口，与 NCX 并存以兼容新旧阅读器）
+        const navEntries = chapters.map(ch => `            <li><a href="${ch.id}.xhtml">${escapeXML(ch.title)}</a></li>`).join('\n');
+        epubObj.OEBPS.Text["nav.xhtml"] = fflate.strToU8(
+`<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh-CN">
+<head>
+    <title>目录</title>
+    <link href="../Styles/style.css" rel="stylesheet" type="text/css" />
+</head>
+<body>
+    <nav epub:type="toc" id="toc">
+        <h2>目录</h2>
+        <ol>
+            <li><a href="toc.xhtml">目录</a></li>
+${navEntries}
+        </ol>
+    </nav>
+</body>
+</html>`);
+
+        const coverMeta = images.length > 0 ? `<meta name="cover" content="${images[0].id}"/>` : '';
+
         epubObj.OEBPS["content.opf"] = fflate.strToU8(
 `<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
-    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="3.0" xml:lang="zh-CN">
+    <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
         <dc:identifier id="BookId">${bookUUID}</dc:identifier>
         <dc:title>${safeTitle}</dc:title>
         <dc:language>zh-CN</dc:language>
-        <dc:creator opf:role="aut">百合会，https://github.com/RRRRUDDDD/yamibo_downloader</dc:creator>
+        <dc:creator id="creator">${safeAuthor}</dc:creator>
+        <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
         <dc:source>${safeUrl}</dc:source>
         <dc:rights>https://github.com/RRRRUDDDD/yamibo_downloader</dc:rights>
+        <meta property="dcterms:modified">${modifiedDate}</meta>
+        ${coverMeta}
     </metadata>
     <manifest>
         <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="nav" href="Text/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+        <item id="toc-page" href="Text/toc.xhtml" media-type="application/xhtml+xml"/>
         ${manifestItems}
     </manifest>
     <spine toc="ncx">
+        <itemref idref="toc-page"/>
         ${spineItems}
     </spine>
 </package>`);
@@ -2107,7 +2367,7 @@ sup {
 
         fflate.zip(epubObj, { level: 0 }, (err, zipped) => {
             if (err) {
-                alert('排版封装失败！\n' + err.message);
+                ydToast('排版封装失败！' + err.message, 'error', 6000);
                 resetButton(btn, mode); return;
             }
             const blob = new Blob([zipped], { type: 'application/epub+zip' });
