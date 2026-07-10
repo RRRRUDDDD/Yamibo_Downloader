@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         百合会下载器
 // @namespace    https://github.com/RRRRUDDDD/yamibo_downloader
-// @version      2.6
+// @version      2.7
 // @description  用于下载百合会的小说与漫画，下载格式可选epub与txt
 // @author       RUD
 // @match        *://bbs.yamibo.com/thread-*
@@ -1428,6 +1428,13 @@ sup {
         return lbl;
     }
 
+    function renderChapterList(listDiv, links) {
+        listDiv.innerHTML = '';
+        const frag = document.createDocumentFragment();
+        links.forEach((link, idx) => frag.appendChild(createChapterLabel(link, idx)));
+        listDiv.appendChild(frag);
+    }
+
     function parseFilterExpr(expr, total) {
         const indices = new Set();
         expr.split(',').forEach(part => {
@@ -1451,36 +1458,51 @@ sup {
         return indices;
     }
 
-    function fetchImageBuffer(url) {
-        return new Promise((resolve, reject) => {
-            if (typeof GM_xmlhttpRequest !== 'undefined') {
-                GM_xmlhttpRequest({
-                    method: 'GET', url: url, responseType: 'arraybuffer', headers: { 'Referer': window.location.href },
-                    onload: res => res.status >= 200 && res.status < 300 && res.response ? resolve(res.response) : reject(new Error(`HTTP ${res.status}`)),
-                    onerror: () => reject(new Error('Network Error'))
-                });
-            } else {
-                fetch(url).then(res => res.ok ? res.arrayBuffer() : Promise.reject(new Error(`HTTP ${res.status}`))).then(resolve).catch(reject);
-            }
-        });
-    }
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-    const _htmlParser = new DOMParser();
-    async function fetchHtml(url, retries = 2) {
+    async function withRetry(taskFn, retries = 2) {
         let lastErr;
         for (let attempt = 0; attempt <= retries; attempt++) {
-            try {
-                const res = await fetch(url, { headers: { 'Referer': window.location.href } });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const html = await res.text();
-                return _htmlParser.parseFromString(html, 'text/html');
-            } catch (err) {
+            try { return await taskFn(); }
+            catch (err) {
                 lastErr = err;
-                if (attempt < retries) await new Promise(r => setTimeout(r, 500 * (attempt + 1) + Math.random() * 300));
+                if (attempt < retries) await sleep(500 * (attempt + 1) + Math.random() * 300);
             }
         }
         throw lastErr;
     }
+
+    const REQUEST_TIMEOUT = 30000;
+
+    function fetchWithTimeout(url) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+        return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    }
+
+    // Referer 仅 GM 请求可设置（fetch 中属 forbidden header，浏览器会静默忽略）
+    function fetchImageBufferOnce(url) {
+        return new Promise((resolve, reject) => {
+            if (typeof GM_xmlhttpRequest !== 'undefined') {
+                GM_xmlhttpRequest({
+                    method: 'GET', url: url, responseType: 'arraybuffer', timeout: REQUEST_TIMEOUT, headers: { 'Referer': window.location.href },
+                    onload: res => res.status >= 200 && res.status < 300 && res.response ? resolve(res.response) : reject(new Error(`HTTP ${res.status}`)),
+                    onerror: () => reject(new Error('Network Error')),
+                    ontimeout: () => reject(new Error('Timeout'))
+                });
+            } else {
+                fetchWithTimeout(url).then(res => res.ok ? res.arrayBuffer() : Promise.reject(new Error(`HTTP ${res.status}`))).then(resolve).catch(reject);
+            }
+        });
+    }
+    const fetchImageBuffer = url => withRetry(() => fetchImageBufferOnce(url));
+
+    const _htmlParser = new DOMParser();
+    const fetchHtml = url => withRetry(async () => {
+        const res = await fetchWithTimeout(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return _htmlParser.parseFromString(await res.text(), 'text/html');
+    });
 
     function getContentImageSrc(imgNode) {
         return imgNode.getAttribute('zoomfile') || imgNode.getAttribute('file') || imgNode.getAttribute('src');
@@ -1499,6 +1521,17 @@ sup {
         if (lower.includes('.gif')) return 'gif';
         if (lower.includes('.webp')) return 'webp';
         return 'jpg';
+    }
+
+    // 附件 URL 常无扩展名，按文件头校正 MIME（文件名不改，内容引用在解析期已生成）
+    function sniffImageMime(buffer) {
+        if (!buffer || buffer.byteLength < 12) return null;
+        const b = new Uint8Array(buffer, 0, 12);
+        if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return 'image/png';
+        if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return 'image/jpeg';
+        if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif';
+        if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return 'image/webp';
+        return null;
     }
 
     function getMaxPage(doc) {
@@ -1526,6 +1559,15 @@ sup {
         const m = (authLink.getAttribute('href') || '').match(/uid[=-](\d+)/);
         return m ? m[1] : null;
     }
+    function getFirstPostAuthorUid(doc) {
+        const firstPost = doc.querySelector('#postlist > div[id^="post_"]');
+        return getPostAuthorUid(firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null);
+    }
+    function getCurrentPageFromDoc(doc) {
+        const cur = doc.querySelector('.pg strong');
+        const n = cur ? parseInt(cur.textContent, 10) : NaN;
+        return isNaN(n) ? 1 : n; // 无分页条即单页
+    }
     function runLimitedPool(items, limit, worker) {
         const results = new Array(items.length);
         let next = 0;
@@ -1533,7 +1575,7 @@ sup {
             while (next < items.length) {
                 const cur = next++;
                 try { results[cur] = await worker(items[cur], cur); }
-                catch (e) { results[cur] = undefined; }
+                catch (e) { console.warn('[yamibo] 并发任务异常', e); results[cur] = undefined; }
             }
         }
         const runners = [];
@@ -1555,30 +1597,25 @@ sup {
         return result;
     }
 
-    // 按 authorid 过滤逐页抓取楼主楼层；onPage 返回 false 可提前终止
+    // 按 authorid 过滤逐页抓取楼主楼层；onPage 返回 false 可提前终止。
+    // 任一页失败都上抛：由上层把章节标记为失败并进入重试流程，避免静默缺楼
     async function forEachOPPage(tid, opUid, onPage) {
         let curPage = 1;
         let maxPage = 1;
         while (curPage <= maxPage) {
-            try {
-                const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
-                const doc = await fetchHtml(pageUrl);
-                if (curPage === 1) maxPage = getMaxPage(doc);
-                if (onPage(doc, curPage, maxPage) === false) return;
-            } catch (err) {
-                if (curPage === 1) throw err; // 首页失败无法确定总页数，整体失败交由上层处理
-                console.warn(`[yamibo] 楼主楼层第 ${curPage} 页抓取失败`, err);
-            }
+            const pageUrl = `${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=${curPage}&authorid=${opUid}`;
+            const doc = await fetchHtml(pageUrl);
+            if (curPage === 1) maxPage = getMaxPage(doc);
+            if (onPage(doc, curPage, maxPage) === false) return;
             curPage++;
-            if (curPage <= maxPage) await new Promise(resolve => setTimeout(resolve, 300)); // 延迟防拦截
+            if (curPage <= maxPage) await sleep(300); // 延迟防拦截
         }
     }
 
     async function fetchOPFloorsHelper() {
         const opLinks = [];
         try {
-            const firstPostDiv = document.querySelector('#postlist > div[id^="post_"]');
-            const opUid = getPostAuthorUid(firstPostDiv ? firstPostDiv.querySelector('.authi a[href*="uid"]') : null);
+            const opUid = getFirstPostAuthorUid(document);
             const tid = getThreadTid(window.location.href);
             if (!opUid || !tid) return opLinks;
 
@@ -1602,13 +1639,37 @@ sup {
         return opLinks;
     }
 
+    // 行内标签白名单：font/strike 等旧式标签映射为 XHTML5 合法标签
+    const INLINE_TAG_MAP = { B: 'b', STRONG: 'strong', I: 'i', EM: 'em', U: 'u', S: 's', STRIKE: 's', DEL: 's', SUB: 'sub', SUP: 'sup', RUBY: 'ruby', RT: 'rt', SPAN: 'span', FONT: 'span' };
+    const FONT_SIZE_TO_CSS = { 1: 'x-small', 2: 'small', 3: 'medium', 4: 'large', 5: 'x-large', 6: 'xx-large', 7: 'xxx-large' };
+
+    // color/size/face 等旧式外观属性统一并入 style，XHTML5 内容文档不允许这些属性
+    function buildInlineAttrs(node, tag) {
+        const styleParts = [];
+        const styleAttr = node.getAttribute('style');
+        if (styleAttr) styleParts.push(styleAttr.trim().replace(/;$/, ''));
+        const colorAttr = node.getAttribute('color');
+        if (colorAttr) styleParts.push(`color: ${colorAttr}`);
+        if (tag === 'FONT') {
+            const size = (node.getAttribute('size') || '').trim();
+            if (FONT_SIZE_TO_CSS[size]) styleParts.push(`font-size: ${FONT_SIZE_TO_CSS[size]}`);
+            const face = node.getAttribute('face');
+            if (face) styleParts.push(`font-family: ${face}`);
+        }
+        let attrs = '';
+        if (styleParts.length > 0) attrs += ` style="${escapeXML(styleParts.join('; '))}"`;
+        const cls = node.getAttribute('class');
+        if (cls) attrs += ` class="${escapeXML(cls)}"`;
+        return attrs;
+    }
+
     function parseToParagraphs(rootNode, imgCtx) {
         let paragraphs = [];
         let currentParagraph = '';
 
         function traverse(node) {
             if (node.nodeType === Node.TEXT_NODE) {
-                let text = escapeXML(node.textContent.replace(/&/g, '＆')).replace(/[\r\n]+/g, '');
+                let text = escapeXML(node.textContent).replace(/[\r\n]+/g, '');
                 currentParagraph += text;
             } else if (node.nodeType === Node.ELEMENT_NODE) {
                 const tag = node.tagName.toUpperCase();
@@ -1648,7 +1709,8 @@ sup {
                             imgCtx.registry.push(entry);
                             imgCtx.urlMap.set(absUrl, entry);
                         }
-                        paragraphs.push(`<div class="illus duokan-image-single"><img alt="${entry.fileName}" src="${entry.localPath}" /></div>`);
+                        const origAlt = (node.getAttribute('alt') || '').trim();
+                        paragraphs.push(`<div class="illus duokan-image-single"><img alt="${escapeXML(origAlt || entry.fileName)}" src="${entry.localPath}" /></div>`);
                     }
                     return;
                 }
@@ -1660,23 +1722,15 @@ sup {
                     return;
                 }
 
-                if (['B', 'STRONG', 'RUBY', 'RT', 'SPAN'].includes(tag)) {
+                if (INLINE_TAG_MAP[tag]) {
                     let before = currentParagraph;
                     currentParagraph = '';
                     Array.from(node.childNodes).forEach(traverse);
                     let inner = currentParagraph;
                     currentParagraph = before;
                     if (inner !== '') {
-                        let attrs = '';
-                        if (node.hasAttributes()) {
-                            for (let i = 0; i < node.attributes.length; i++) {
-                                let attr = node.attributes[i];
-                                if (['style', 'color', 'class'].includes(attr.name)) {
-                                    attrs += ` ${attr.name}="${escapeXML(attr.value)}"`;
-                                }
-                            }
-                        }
-                        currentParagraph += `<${tag.toLowerCase()}${attrs}>${inner}</${tag.toLowerCase()}>`;
+                        const outTag = INLINE_TAG_MAP[tag];
+                        currentParagraph += `<${outTag}${buildInlineAttrs(node, tag)}>${inner}</${outTag}>`;
                     }
                     return;
                 }
@@ -1721,11 +1775,23 @@ sup {
         return frag;
     }
 
+    // 楼主 = 帖子第 1 页首帖作者；目录链接（findpost 跳转等）可能落在第 2+ 页，
+    // 此时当前页首帖不是楼主，需回读第 1 页确认
+    async function resolveOPUid(firstDoc, threadUrl, tid) {
+        const uidInDoc = getFirstPostAuthorUid(firstDoc);
+        if (/[?&]authorid=\d+/.test(threadUrl) || getCurrentPageFromDoc(firstDoc) === 1) return uidInDoc;
+        try {
+            const page1 = await fetchHtml(`${window.location.origin}/forum.php?mod=viewthread&tid=${tid}&page=1`);
+            return getFirstPostAuthorUid(page1) || uidInDoc;
+        } catch (err) {
+            console.warn('[yamibo] 回读第 1 页确认楼主失败，退回当前页首帖作者', err);
+            return uidInDoc;
+        }
+    }
+
     async function collectAllOPFloors(firstDoc, threadUrl, imgCtx, cancelToken) {
         const tid = getThreadTid(threadUrl);
-        const firstPost = firstDoc.querySelector('#postlist > div[id^="post_"]');
-        const opAuthLink = firstPost ? firstPost.querySelector('.authi a[href*="uid"]') : null;
-        const opUid = getPostAuthorUid(opAuthLink);
+        const opUid = tid ? await resolveOPUid(firstDoc, threadUrl, tid) : null;
 
         if (!opUid || !tid) {
             const pcb = firstDoc.querySelector('.pcb');
@@ -1802,9 +1868,7 @@ sup {
 
             const listDiv = document.createElement('div');
             listDiv.className = 'yd-list';
-            links.forEach((link, idx) => {
-                listDiv.appendChild(createChapterLabel(link, idx));
-            });
+            renderChapterList(listDiv, links);
             modal.appendChild(listDiv);
 
             const btnDiv = document.createElement('div');
@@ -1822,10 +1886,7 @@ sup {
                     if (opLinks.length > 0) {
                         onLinksUpdate(opLinks);
                         links = opLinks;
-                        listDiv.innerHTML = '';
-                        links.forEach((link, idx) => {
-                            listDiv.appendChild(createChapterLabel(link, idx));
-                        });
+                        renderChapterList(listDiv, links);
                         fetchOpBtn.innerText = '已切换';
                     } else {
                         fetchOpBtn.innerText = '获取失败';
@@ -1838,10 +1899,19 @@ sup {
 
             const rightBtnDiv = document.createElement('div');
             rightBtnDiv.className = 'yd-btn-group';
+            const onEscKey = (e) => { if (e.key === 'Escape') closeModal(null); };
+            const closeModal = (val) => {
+                document.removeEventListener('keydown', onEscKey);
+                overlay.remove();
+                resolve(val);
+            };
+            document.addEventListener('keydown', onEscKey);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(null); });
+
             const cancelBtn = document.createElement('button');
             cancelBtn.innerText = '取消';
             cancelBtn.className = 'yd-btn-secondary';
-            cancelBtn.onclick = () => { document.body.removeChild(overlay); resolve(null); };
+            cancelBtn.onclick = () => closeModal(null);
 
             const confirmBtn = document.createElement('button');
             confirmBtn.innerText = '确认提取';
@@ -1850,8 +1920,7 @@ sup {
                 const format = overlay.querySelector('input[name="dl_format"]:checked').value;
                 const selectedIdxs = Array.from(overlay.querySelectorAll('.chap-cb:checked')).map(cb => parseInt(cb.value));
                 const opModeIdxs = new Set(Array.from(overlay.querySelectorAll('.chap-op-cb:checked')).map(cb => parseInt(cb.value)));
-                document.body.removeChild(overlay);
-                resolve({ format, selectedIdxs, opModeIdxs });
+                closeModal({ format, selectedIdxs, opModeIdxs });
             };
 
             rightBtnDiv.appendChild(cancelBtn);
@@ -1978,6 +2047,7 @@ sup {
         links = userSelection.selectedIdxs.map(idx => ({ ...links[idx], fullOpMode: opModeIdxs.has(idx) }));
 
         const imgCtx = { registry: [], counter: 0, urlMap: new Map() };
+        const opContentCache = new Map(); // tid -> Promise<content>，同一帖子的全楼层内容一次任务只抓一遍
         const cancelToken = { cancelled: false };
 
         const cancelBtn = document.createElement('button');
@@ -2005,7 +2075,16 @@ sup {
                 let chapterContent = '';
 
                 if (linkObj.fullOpMode) {
-                    chapterContent = await collectAllOPFloors(doc, linkObj.url, imgCtx, cancelToken);
+                    const tid = getThreadTid(linkObj.url);
+                    let pending = tid ? opContentCache.get(tid) : null;
+                    if (!pending) {
+                        pending = collectAllOPFloors(doc, linkObj.url, imgCtx, cancelToken);
+                        if (tid) {
+                            opContentCache.set(tid, pending);
+                            pending.catch(() => opContentCache.delete(tid)); // 失败不缓存，保证重试真正重抓
+                        }
+                    }
+                    chapterContent = await pending;
                 } else {
                     let pidMatch = linkObj.url.match(/pid=(\d+)/) || linkObj.url.match(/#pid(\d+)/);
                     let pcbNode = null;
@@ -2022,7 +2101,8 @@ sup {
 
                     if (!pcbNode) {
                         const allPosts = doc.querySelectorAll('#postlist > div[id^="post_"]');
-                        if (allPosts.length > 1 && linkObj.url.includes('page=') && !linkObj.url.includes('page=1')) {
+                        const pageMatch = linkObj.url.match(/[?&]page=(\d+)/);
+                        if (allPosts.length > 1 && pageMatch && parseInt(pageMatch[1], 10) > 1) {
                             pcbNode = allPosts[1].querySelector('.pcb') || doc.querySelector('.pcb');
                         } else {
                             pcbNode = doc.querySelector('.pcb');
@@ -2048,7 +2128,7 @@ sup {
             chapterDone++;
             setBtnText(btn, `获取章节: ${chapterDone} / ${links.length}...`);
             updateProgress(btn, Math.round((chapterDone / links.length) * 70));
-            await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 300));
+            await sleep(300 + Math.random() * 300);
             return result;
         });
         if (bailIfCancelled()) return;
@@ -2066,7 +2146,7 @@ sup {
                 chapterResults[idx] = await fetchOneChapter(links[idx], idx);
                 retryDone++;
                 setBtnText(btn, `重试章节: ${retryDone} / ${failedIdxs.length}...`);
-                await new Promise(resolve => setTimeout(resolve, 300 + Math.random() * 300));
+                await sleep(300 + Math.random() * 300);
             });
             failedIdxs = failedIdxs.filter(i => chapterResults[i] && chapterResults[i].failed);
         }
@@ -2075,11 +2155,20 @@ sup {
         const chapters = [];
         chapterResults.forEach(r => { if (r) chapters.push(r); });
 
-        if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && imgCtx.registry.length > 0) {
+        // 只下载、打包被章节实际引用的插图（章节失败被跳过后，解析途中注册的图片会成为孤儿）
+        const referencedImages = new Set();
+        const imgRefRe = /src="\.\.\/Images\/([^"]+)"/g;
+        chapters.forEach(ch => {
+            let m;
+            while ((m = imgRefRe.exec(ch.content)) !== null) referencedImages.add(m[1]);
+        });
+        const usedImages = imgCtx.registry.filter(img => referencedImages.has(img.fileName));
+
+        if ((currentFormat === 'EPUB' || currentFormat === 'BOTH') && usedImages.length > 0) {
             const IMAGE_CONCURRENCY = 3;
             let imgDone = 0;
             const failedImages = [];
-            await runLimitedPool(imgCtx.registry, IMAGE_CONCURRENCY, async (img) => {
+            await runLimitedPool(usedImages, IMAGE_CONCURRENCY, async (img) => {
                 if (cancelToken.cancelled) return;
                 try {
                     if (img.url.startsWith('data:image')) {
@@ -2088,16 +2177,21 @@ sup {
                     } else {
                         img.buffer = await fetchImageBuffer(img.url);
                     }
+                    const sniffed = sniffImageMime(img.buffer);
+                    if (sniffed) img.mime = sniffed;
                 } catch (err) {
                     console.warn(`插图下载失败: ${img.url}`, err);
                     failedImages.push(img.fileName);
                 }
                 imgDone++;
-                setBtnText(btn, `下载插图: ${imgDone} / ${imgCtx.registry.length}...`);
-                updateProgress(btn, 70 + Math.round((imgDone / imgCtx.registry.length) * 25));
-                await new Promise(resolve => setTimeout(resolve, 100 + Math.random() * 150));
+                setBtnText(btn, `下载插图: ${imgDone} / ${usedImages.length}...`);
+                updateProgress(btn, 70 + Math.round((imgDone / usedImages.length) * 25));
+                await sleep(100 + Math.random() * 150);
             });
-            if (failedImages.length > 0) console.warn(`[yamibo] 共 ${failedImages.length} 张插图下载失败，已用占位图替代`);
+            if (failedImages.length > 0) {
+                console.warn(`[yamibo] 共 ${failedImages.length} 张插图下载失败，已用占位图替代`);
+                ydToast(`有 ${failedImages.length} 张插图下载失败，已用占位图替代`, 'error', 6000);
+            }
         }
         if (bailIfCancelled()) return;
 
@@ -2110,14 +2204,11 @@ sup {
         setBtnText(btn, '正在打包中...');
         updateProgress(btn, 98);
         setTimeout(() => {
-            threadTitle = threadTitle.replace(/&/g, '＆');
-            chapters.forEach(ch => ch.title = ch.title.replace(/&/g, '＆'));
-
             if (currentFormat === 'TXT' || currentFormat === 'BOTH') {
                 generateTXT(threadTitle, chapters);
             }
             if (currentFormat === 'EPUB' || currentFormat === 'BOTH') {
-                generateEPUB(threadTitle, chapters, imgCtx.registry, btn, mode, bookAuthor);
+                generateEPUB(threadTitle, chapters, usedImages, btn, mode, bookAuthor);
             } else {
                 setBtnText(btn, '下载完成！');
                 updateProgress(btn, 100);
@@ -2158,7 +2249,7 @@ sup {
 
         function domToBbcode(node) {
             if (node.nodeType === Node.TEXT_NODE) {
-                return node.textContent.replace(/&/g, '＆');
+                return node.textContent;
             }
             if (node.nodeType === Node.ELEMENT_NODE) {
                 let tag = node.tagName.toUpperCase();
@@ -2239,6 +2330,20 @@ sup {
         URL.revokeObjectURL(downloadUrl);
     }
 
+    // 按章节顺序取第一张成功下载的插图作封面：注册顺序受并发完成先后影响，不能作为依据
+    function pickCoverImage(chapters, images) {
+        const byPath = new Map(images.map(img => [img.localPath, img]));
+        const re = /<img[^>]*src="([^"]+)"/g;
+        for (const ch of chapters) {
+            let m;
+            while ((m = re.exec(ch.content)) !== null) {
+                const img = byPath.get(m[1]);
+                if (img && img.buffer && img.buffer.byteLength > 0) return img;
+            }
+        }
+        return null;
+    }
+
     function generateEPUB(title, chapters, images, btn, mode, author) {
         const safeTitle = escapeXML(title);
         const safeUrl = escapeXML(window.location.href);
@@ -2266,10 +2371,11 @@ sup {
 
         const dummy1x1 = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 8, 215, 99, 96, 0, 2, 0, 0, 5, 0, 1, 226, 38, 5, 155, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130]);
 
-        images.forEach((img, idx) => {
-            if (img.buffer && img.buffer.byteLength > 0) epubObj.OEBPS.Images[img.fileName] = new Uint8Array(img.buffer);
-            else { epubObj.OEBPS.Images[img.fileName] = dummy1x1; img.mime = 'image/png'; }
-            const coverProp = idx === 0 ? ' properties="cover-image"' : '';
+        const coverImage = pickCoverImage(chapters, images);
+        images.forEach(img => {
+            if (img.buffer && img.buffer.byteLength > 0) epubObj.OEBPS.Images[img.fileName] = [new Uint8Array(img.buffer), { level: 0 }];
+            else { epubObj.OEBPS.Images[img.fileName] = [dummy1x1, { level: 0 }]; img.mime = 'image/png'; }
+            const coverProp = img === coverImage ? ' properties="cover-image"' : '';
             manifestItems += `<item id="${img.id}" href="Images/${img.fileName}" media-type="${img.mime}"${coverProp}/>\n`;
         });
 
@@ -2335,7 +2441,7 @@ ${navEntries}
 </body>
 </html>`);
 
-        const coverMeta = images.length > 0 ? `<meta name="cover" content="${images[0].id}"/>` : '';
+        const coverMeta = coverImage ? `<meta name="cover" content="${coverImage.id}"/>` : '';
 
         epubObj.OEBPS["content.opf"] = fflate.strToU8(
 `<?xml version="1.0" encoding="UTF-8"?>
@@ -2365,7 +2471,8 @@ ${navEntries}
 
         epubObj.OEBPS["toc.ncx"] = fflate.strToU8(`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd"><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="${bookUUID}"/><meta name="dtb:depth" content="1"/><meta name="dtb:totalPageCount" content="0"/><meta name="dtb:maxPageNumber" content="0"/></head><docTitle><text>${safeTitle}</text></docTitle><navMap>${navPoints}</navMap></ncx>`);
 
-        fflate.zip(epubObj, { level: 0 }, (err, zipped) => {
+        // 文本走 deflate 压缩；图片与 mimetype 保持 store（mimetype 必须为首条目且不压缩）
+        fflate.zip(epubObj, { level: 6 }, (err, zipped) => {
             if (err) {
                 ydToast('排版封装失败！' + err.message, 'error', 6000);
                 resetButton(btn, mode); return;
